@@ -6,7 +6,7 @@ import Combine
 final class AstrophotographyViewModel: ObservableObject {
     @Published var isSessionActive = false
     @Published var iso: Float = 32 { didSet { cameraManager.setISO(iso) } }
-    @Published var shutterSpeed: Double = 0.1 { didSet { cameraManager.setExposureDuration(seconds: shutterSpeed) } }
+    @Published var shutterSpeed: Float = 0.1 { didSet { cameraManager.setExposureDuration(seconds: Double(shutterSpeed)) } } // теперь Float
     @Published var focus: Float = 0.5 { didSet { cameraManager.setFocus(lensPosition: focus) } }
     @Published var whiteBalanceKelvin: Float = 5000 { didSet { cameraManager.setWhiteBalance(tempKelvin: whiteBalanceKelvin) } }
     @Published var intervalShots: Int = 10
@@ -26,7 +26,7 @@ final class AstrophotographyViewModel: ObservableObject {
     private func bindCameraUpdates() {
         cameraManager.$currentISO.assign(to: &$iso)
         cameraManager.$currentExposureDuration
-            .map { $0.seconds }
+            .map { Float($0.seconds) } // преобразуем в Float
             .assign(to: &$shutterSpeed)
         cameraManager.$currentLensPosition.assign(to: &$focus)
     }

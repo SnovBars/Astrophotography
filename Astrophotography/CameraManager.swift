@@ -12,11 +12,12 @@ final class CameraManager: NSObject, ObservableObject {
     @Published var currentLensPosition: Float = 0
     @Published var currentWhiteBalanceGains: AVCaptureDevice.WhiteBalanceGains = .init()
     
-    private let session = AVCaptureSession()
+    // теперь internal (доступен из CameraView)
+    let session = AVCaptureSession()
     private let photoOutput = AVCapturePhotoOutput()
     private var device: AVCaptureDevice?
     
-    // Хранилище активных делегатов, чтобы они не освобождались до завершения захвата
+    // Хранилище активных делегатов (исправление зависаний)
     private var activeDelegates: [Int64: any AVCapturePhotoCaptureDelegate] = [:]
     
     // MARK: - Setup
@@ -30,18 +31,23 @@ final class CameraManager: NSObject, ObservableObject {
         if session.canAddInput(input) { session.addInput(input) }
         
         if session.canAddOutput(photoOutput) { session.addOutput(photoOutput) }
-        photoOutput.isHighResolutionCaptureEnabled = true
-        photoOutput.maxPhotoQualityPrioritization = .quality
         
-        if let maxDimensions = photoOutput.maxPhotoDimensions(for: .heic) {
-            photoOutput.maxPhotoDimensions = maxDimensions
+        // Настройка максимального разрешения (48MP) через maxPhotoDimensions
+        // Используем availablePhotoDimensions для выбора максимального
+        if let maxDim = photoOutput.availablePhotoDimensions.max(by: { $0.width < $1.width }) {
+            photoOutput.maxPhotoDimensions = maxDim
         }
         
         device = camera
         try? device?.lockForConfiguration()
-        device?.activeFormat = device?.formats.first { format in
-            format.photoDimensions.width == photoOutput.maxPhotoDimensions.width
-        } ?? device?.activeFormat
+        // Выбираем формат с максимальным разрешением
+        if let maxDim = photoOutput.maxPhotoDimensions as CMVideoDimensions? {
+            let desiredFormat = device?.formats.first { format in
+                let dims = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
+                return dims.width == maxDim.width && dims.height == maxDim.height
+            }
+            device?.activeFormat = desiredFormat ?? device?.activeFormat
+        }
         device?.unlockForConfiguration()
         
         updateManualControlRanges()
@@ -49,8 +55,16 @@ final class CameraManager: NSObject, ObservableObject {
         return true
     }
     
-    func startSession() { DispatchQueue.global().async { self.session.startRunning() } }
-    func stopSession() { session.stopRunning() }
+    func startSession() {
+        // Запуск в фоне без конфликтов с @MainActor
+        Task.detached { [weak self] in
+            self?.session.startRunning()
+        }
+    }
+    
+    func stopSession() {
+        session.stopRunning()
+    }
     
     // MARK: - Manual Controls
     func setISO(_ iso: Float) {
@@ -101,26 +115,33 @@ final class CameraManager: NSObject, ObservableObject {
     // MARK: - Capture (Single Photo)
     func capturePhoto(completion: @escaping (Data?) -> Void) {
         var settings = AVCapturePhotoSettings()
-        if photoOutput.maxPhotoDimensions.width > 0 {
+        if let maxDim = photoOutput.maxPhotoDimensions as CMVideoDimensions? {
+            settings.maxPhotoDimensions = maxDim
+            settings.photoQualityPrioritization = .quality
+        }
+        // Если доступен RAW, используем его
+        if let rawFormat = photoOutput.availableRawPhotoPixelFormatTypes.first {
+            settings = AVCapturePhotoSettings(rawPixelFormatType: rawFormat)
+            if let maxDim = photoOutput.maxPhotoDimensions as CMVideoDimensions? {
+                settings.maxPhotoDimensions = maxDim
+            }
+        } else {
             settings = AVCapturePhotoSettings(format: [
                 AVVideoCodecKey: AVVideoCodecType.hevc,
                 AVVideoCompressionPropertiesKey: [AVVideoQualityKey: 1.0]
             ])
-            settings.maxPhotoDimensions = photoOutput.maxPhotoDimensions
+            if let maxDim = photoOutput.maxPhotoDimensions as CMVideoDimensions? {
+                settings.maxPhotoDimensions = maxDim
+            }
             settings.photoQualityPrioritization = .quality
         }
-        if photoOutput.availableRawPhotoPixelFormatTypes.first != nil {
-            settings = AVCapturePhotoSettings(rawPixelFormatType: photoOutput.availableRawPhotoPixelFormatTypes.first!)
-            settings.isAutoStillImageStabilizationEnabled = false
-        }
-        settings.isHighResolutionPhotoEnabled = true
         
         let delegate = PhotoCaptureDelegate(manager: self, uniqueID: settings.uniqueID, completion: completion)
         activeDelegates[settings.uniqueID] = delegate
         photoOutput.capturePhoto(with: settings, delegate: delegate)
     }
     
-    // MARK: - Long Exposure Simulation – исправленная версия с сохранением делегатов
+    // MARK: - Long Exposure (исправлена логика, делегаты сохраняются)
     func startLongExposure(totalDuration: Double, completion: @escaping (Data?) -> Void) {
         guard let device = device else { completion(nil); return }
         let maxFrameDuration = device.activeFormat.maxExposureDuration
@@ -132,7 +153,7 @@ final class CameraManager: NSObject, ObservableObject {
             var accumulatedImage: CIImage?
             var framesCaptured = 0
             
-            for frameIndex in 0..<requiredFrames {
+            for _ in 0..<requiredFrames {
                 let image = await captureSingleRawFrame()
                 guard let ciImage = image else { continue }
                 
@@ -165,6 +186,7 @@ final class CameraManager: NSObject, ObservableObject {
             }
             
             let context = CIContext()
+            // Исправлен порядок аргументов: colorSpace, format
             let tiffData = context.tiffRepresentation(of: averaged,
                                                        colorSpace: CGColorSpace(name: CGColorSpace.linearGray) ?? CGColorSpaceCreateDeviceRGB(),
                                                        format: .RGBA16)
@@ -180,7 +202,9 @@ final class CameraManager: NSObject, ObservableObject {
             } else {
                 settings = AVCapturePhotoSettings()
             }
-            settings.isHighResolutionPhotoEnabled = true
+            if let maxDim = photoOutput.maxPhotoDimensions as CMVideoDimensions? {
+                settings.maxPhotoDimensions = maxDim
+            }
             
             let delegate = SingleFrameCaptureDelegate(manager: self, uniqueID: settings.uniqueID) { data in
                 let ciImage = data.flatMap { CIImage(data: $0) }
@@ -191,7 +215,7 @@ final class CameraManager: NSObject, ObservableObject {
         }
     }
     
-    // MARK: - Intervalometer & Delay
+    // MARK: - Intervalometer
     func startIntervalometer(shots: Int, delayBetween: TimeInterval, photoHandler: @escaping (Data?) -> Void) {
         Task {
             for _ in 0..<shots {
@@ -209,7 +233,7 @@ final class CameraManager: NSObject, ObservableObject {
     }
 }
 
-// MARK: - Photo Capture Delegate (умеет сам удалять себя из менеджера)
+// MARK: - Делегаты (исправлены, удаляют себя после завершения)
 private class PhotoCaptureDelegate: NSObject, AVCapturePhotoCaptureDelegate {
     private weak var manager: CameraManager?
     private let uniqueID: Int64
@@ -225,15 +249,12 @@ private class PhotoCaptureDelegate: NSObject, AVCapturePhotoCaptureDelegate {
     func photoOutput(_ output: AVCapturePhotoOutput, didFinishProcessingPhoto photo: AVCapturePhoto, error: Error?) {
         let data = error == nil ? photo.fileDataRepresentation() : nil
         completion(data)
-        
-        // Удаляем себя из хранилища делегатов
         Task { @MainActor in
             self.manager?.removeDelegate(withID: self.uniqueID)
         }
     }
 }
 
-// MARK: - Вспомогательный делегат для одиночного кадра RAW
 private class SingleFrameCaptureDelegate: NSObject, AVCapturePhotoCaptureDelegate {
     private weak var manager: CameraManager?
     private let uniqueID: Int64
@@ -249,7 +270,6 @@ private class SingleFrameCaptureDelegate: NSObject, AVCapturePhotoCaptureDelegat
     func photoOutput(_ output: AVCapturePhotoOutput, didFinishProcessingPhoto photo: AVCapturePhoto, error: Error?) {
         let data = error == nil ? photo.fileDataRepresentation() : nil
         completion(data)
-        
         Task { @MainActor in
             self.manager?.removeDelegate(withID: self.uniqueID)
         }

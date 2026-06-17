@@ -1,7 +1,7 @@
 // CameraView.swift
 import SwiftUI
 import AVFoundation
-import CoreMotion   // <-- явно добавлен для горизонта (хотя используется через менеджер)
+import CoreMotion
 
 struct CameraView: View {
     @StateObject private var viewModel = AstrophotographyViewModel()
@@ -109,7 +109,8 @@ struct CameraView: View {
         .tint(.white)
     }
     
-    private func controlSlider(title: String, value: Binding<Float>, range: ClosedRange<Float>, step: Float, formatter: @escaping (Float) -> String = { "\($0)" }) -> some View {
+    // Обобщённая функция слайдера, работает с Float и Double
+    private func controlSlider<Value: BinaryFloatingPoint>(title: String, value: Binding<Value>, range: ClosedRange<Value>, step: Value, formatter: @escaping (Value) -> String = { "\($0)" }) -> some View where Value: LosslessStringConvertible {
         VStack {
             Text("\(title): \(formatter(value.wrappedValue))")
                 .font(.caption)
