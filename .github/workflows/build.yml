@@ -5,19 +5,23 @@ on:
     branches: [ "main", "develop" ]
   pull_request:
     branches: [ "main" ]
-  workflow_dispatch:   # позволяет запускать вручную из интерфейса
+  workflow_dispatch:
 
 jobs:
   build:
-    runs-on: macos-14   # macOS Sonoma с Xcode 15
+    runs-on: macos-15  # Используем актуальную macOS 15 с Xcode 16+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Select Xcode version
-        run: |
-          sudo xcode-select -s /Applications/Xcode_15.4.app/Contents/Developer
-          xcodebuild -version
+      - name: Check Xcode version
+        run: xcodebuild -version  # Просто проверяем, какая версия Xcode стоит по умолчанию
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode Project
+        run: xcodegen generate
 
       - name: Clean and build for iOS device (Release)
         run: |
@@ -43,12 +47,10 @@ jobs:
           fi
           mkdir -p Payload
           cp -R "$APP_PATH" Payload/
-          ls -la Payload/
 
       - name: Package IPA
         run: |
           zip -r Astrophotography.ipa Payload/
-          ls -la *.ipa
 
       - name: Upload IPA as artifact
         uses: actions/upload-artifact@v4

@@ -1,0 +1,15 @@
+name: Astrophotography
+options:
+  bundleIdPrefix: com.nikita
+targets:
+  Astrophotography:
+    type: application
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources: [Astrophotography]
+    info:
+      path: Astrophotography/Info.plist
+      properties:
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
