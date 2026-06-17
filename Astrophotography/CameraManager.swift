@@ -12,12 +12,11 @@ final class CameraManager: NSObject, ObservableObject {
     @Published var currentLensPosition: Float = 0
     @Published var currentWhiteBalanceGains: AVCaptureDevice.WhiteBalanceGains = .init()
     
-    // теперь internal (доступен из CameraView)
     let session = AVCaptureSession()
     private let photoOutput = AVCapturePhotoOutput()
     private var device: AVCaptureDevice?
     
-    // Хранилище активных делегатов (исправление зависаний)
+    // Хранилище активных делегатов для предотвращения утечек памяти
     private var activeDelegates: [Int64: any AVCapturePhotoCaptureDelegate] = [:]
     
     // MARK: - Setup
@@ -28,25 +27,16 @@ final class CameraManager: NSObject, ObservableObject {
         
         guard let camera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back),
               let input = try? AVCaptureDeviceInput(device: camera) else { return false }
-        if session.canAddInput(input) { session.addInput(input) }
         
+        if session.canAddInput(input) { session.addInput(input) }
         if session.canAddOutput(photoOutput) { session.addOutput(photoOutput) }
         
-        // Настройка максимального разрешения (48MP) через maxPhotoDimensions
-        // Используем availablePhotoDimensions для выбора максимального
-        if let maxDim = photoOutput.availablePhotoDimensions.max(by: { $0.width < $1.width }) {
-            photoOutput.maxPhotoDimensions = maxDim
-        }
-        
         device = camera
+        
         try? device?.lockForConfiguration()
-        // Выбираем формат с максимальным разрешением
-        if let maxDim = photoOutput.maxPhotoDimensions as CMVideoDimensions? {
-            let desiredFormat = device?.formats.first { format in
-                let dims = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
-                return dims.width == maxDim.width && dims.height == maxDim.height
-            }
-            device?.activeFormat = desiredFormat ?? device?.activeFormat
+        // Исправлено: используем верное свойство supportedMaxPhotoDimensions для iOS 17/18
+        if let maxDim = camera.activeFormat.supportedMaxPhotoDimensions.max(by: { $0.width < $1.width }) {
+            photoOutput.maxPhotoDimensions = maxDim
         }
         device?.unlockForConfiguration()
         
@@ -56,14 +46,18 @@ final class CameraManager: NSObject, ObservableObject {
     }
     
     func startSession() {
-        // Запуск в фоне без конфликтов с @MainActor
         Task.detached { [weak self] in
-            self?.session.startRunning()
+            guard let self = self else { return }
+            // В Swift 6 / iOS 18 старт сессии стал асинхронным
+            await self.session.startRunning()
         }
     }
     
     func stopSession() {
-        session.stopRunning()
+        Task.detached { [weak self] in
+            guard let self = self else { return }
+            await self.session.stopRunning()
+        }
     }
     
     // MARK: - Manual Controls
@@ -112,36 +106,29 @@ final class CameraManager: NSObject, ObservableObject {
         currentWhiteBalanceGains = device.deviceWhiteBalanceGains
     }
     
-    // MARK: - Capture (Single Photo)
+    // MARK: - Capture
     func capturePhoto(completion: @escaping (Data?) -> Void) {
         var settings = AVCapturePhotoSettings()
-        if let maxDim = photoOutput.maxPhotoDimensions as CMVideoDimensions? {
-            settings.maxPhotoDimensions = maxDim
-            settings.photoQualityPrioritization = .quality
-        }
-        // Если доступен RAW, используем его
+        let maxDim = photoOutput.maxPhotoDimensions
+        
         if let rawFormat = photoOutput.availableRawPhotoPixelFormatTypes.first {
             settings = AVCapturePhotoSettings(rawPixelFormatType: rawFormat)
-            if let maxDim = photoOutput.maxPhotoDimensions as CMVideoDimensions? {
-                settings.maxPhotoDimensions = maxDim
-            }
         } else {
             settings = AVCapturePhotoSettings(format: [
                 AVVideoCodecKey: AVVideoCodecType.hevc,
                 AVVideoCompressionPropertiesKey: [AVVideoQualityKey: 1.0]
             ])
-            if let maxDim = photoOutput.maxPhotoDimensions as CMVideoDimensions? {
-                settings.maxPhotoDimensions = maxDim
-            }
-            settings.photoQualityPrioritization = .quality
         }
+        
+        settings.maxPhotoDimensions = maxDim
+        settings.photoQualityPrioritization = .quality
         
         let delegate = PhotoCaptureDelegate(manager: self, uniqueID: settings.uniqueID, completion: completion)
         activeDelegates[settings.uniqueID] = delegate
         photoOutput.capturePhoto(with: settings, delegate: delegate)
     }
     
-    // MARK: - Long Exposure (исправлена логика, делегаты сохраняются)
+    // MARK: - Long Exposure
     func startLongExposure(totalDuration: Double, completion: @escaping (Data?) -> Void) {
         guard let device = device else { completion(nil); return }
         let maxFrameDuration = device.activeFormat.maxExposureDuration
@@ -186,10 +173,10 @@ final class CameraManager: NSObject, ObservableObject {
             }
             
             let context = CIContext()
-            // Исправлен порядок аргументов: colorSpace, format
+            // Исправлено: аргумент format теперь идет строго перед colorSpace, как просит компилятор
             let tiffData = context.tiffRepresentation(of: averaged,
-                                                       colorSpace: CGColorSpace(name: CGColorSpace.linearGray) ?? CGColorSpaceCreateDeviceRGB(),
-                                                       format: .RGBA16)
+                                                     format: .RGBA16,
+                                                     colorSpace: CGColorSpace(name: CGColorSpace.linearGray) ?? CGColorSpaceCreateDeviceRGB())
             completion(tiffData)
         }
     }
@@ -199,12 +186,8 @@ final class CameraManager: NSObject, ObservableObject {
             var settings = AVCapturePhotoSettings()
             if let rawFormat = photoOutput.availableRawPhotoPixelFormatTypes.first {
                 settings = AVCapturePhotoSettings(rawPixelFormatType: rawFormat)
-            } else {
-                settings = AVCapturePhotoSettings()
             }
-            if let maxDim = photoOutput.maxPhotoDimensions as CMVideoDimensions? {
-                settings.maxPhotoDimensions = maxDim
-            }
+            settings.maxPhotoDimensions = photoOutput.maxPhotoDimensions
             
             let delegate = SingleFrameCaptureDelegate(manager: self, uniqueID: settings.uniqueID) { data in
                 let ciImage = data.flatMap { CIImage(data: $0) }
@@ -227,13 +210,12 @@ final class CameraManager: NSObject, ObservableObject {
         }
     }
     
-    // MARK: - Управление делегатами
     fileprivate func removeDelegate(withID uniqueID: Int64) {
         activeDelegates.removeValue(forKey: uniqueID)
     }
 }
 
-// MARK: - Делегаты (исправлены, удаляют себя после завершения)
+// MARK: - Delegates
 private class PhotoCaptureDelegate: NSObject, AVCapturePhotoCaptureDelegate {
     private weak var manager: CameraManager?
     private let uniqueID: Int64

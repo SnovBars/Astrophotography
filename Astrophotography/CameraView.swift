@@ -109,8 +109,8 @@ struct CameraView: View {
         .tint(.white)
     }
     
-    // Упрощённая функция слайдера для Float – ошибка исправлена
-    private func controlSlider(title: String, value: Binding<Float>, range: ClosedRange<Float>, step: Float, formatter: @escaping (Float) -> String = { String($0) }) -> some View {
+    // ИСПРАВЛЕНО: Слайдер теперь работает жестко с типом Float без кривых дженериков
+    private func controlSlider(title: String, value: Binding<Float>, range: ClosedRange<Float>, step: Float, formatter: @escaping (Float) -> String = { "\($0)" }) -> some View {
         VStack {
             Text("\(title): \(formatter(value.wrappedValue))")
                 .font(.caption)
