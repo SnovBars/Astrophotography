@@ -109,8 +109,8 @@ struct CameraView: View {
         .tint(.white)
     }
     
-    // Обобщённая функция слайдера, работает с Float и Double
-    private func controlSlider<Value: BinaryFloatingPoint>(title: String, value: Binding<Value>, range: ClosedRange<Value>, step: Value, formatter: @escaping (Value) -> String = { "\($0)" }) -> some View where Value: LosslessStringConvertible {
+    // Упрощённая функция слайдера для Float – ошибка исправлена
+    private func controlSlider(title: String, value: Binding<Float>, range: ClosedRange<Float>, step: Float, formatter: @escaping (Float) -> String = { String($0) }) -> some View {
         VStack {
             Text("\(title): \(formatter(value.wrappedValue))")
                 .font(.caption)
