@@ -36,4 +36,4 @@ final class AstrophotographyViewModel: ObservableObject {
     func capturePhoto() {
         cameraManager.capturePhoto()
     }
-}ы
+}
