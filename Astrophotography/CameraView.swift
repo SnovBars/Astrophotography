@@ -87,7 +87,14 @@ struct CameraView: View {
         .tint(.white)
     }
 
-    private func controlSlider(title: String, value: Binding<Float>, range: ClosedRange<Float>, step: Float, formatter: @escaping (Float) -> String = { "\($0)" }) -> some View {
+    // Универсальная функция слайдера, поддерживающая Float и Double
+    private func controlSlider<Value: BinaryFloatingPoint>(
+        title: String,
+        value: Binding<Value>,
+        range: ClosedRange<Value>,
+        step: Value,
+        formatter: @escaping (Value) -> String = { "\($0)" }
+    ) -> some View {
         VStack {
             Text("\(title): \(formatter(value.wrappedValue))")
                 .font(.caption)
