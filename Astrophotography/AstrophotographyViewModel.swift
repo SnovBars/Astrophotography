@@ -6,7 +6,7 @@ final class AstrophotographyViewModel: ObservableObject {
     // MARK: - Published Properties
     @Published var isSessionActive = false
     @Published var iso: Float = 32.0
-    @Published var shutterSpeedSeconds: Float = 0.1   // теперь Float
+    @Published var shutterSpeedSeconds: Double = 0.1   // в секундах
     @Published var focus: Float = 0.5
     @Published var whiteBalanceKelvin: Float = 5000
 
@@ -15,7 +15,7 @@ final class AstrophotographyViewModel: ObservableObject {
 
     // MARK: - Computed
     var shutterSpeedCMTime: CMTime {
-        CMTime(seconds: Double(shutterSpeedSeconds), preferredTimescale: 1000)
+        CMTime(seconds: shutterSpeedSeconds, preferredTimescale: 1000)
     }
 
     // MARK: - Public Methods
@@ -36,8 +36,4 @@ final class AstrophotographyViewModel: ObservableObject {
     func capturePhoto() {
         cameraManager.capturePhoto()
     }
-<<<<<<< HEAD
 }
-=======
-}
->>>>>>> 2af109eadd0f4ede9e79cb861af0e964588ad74f
