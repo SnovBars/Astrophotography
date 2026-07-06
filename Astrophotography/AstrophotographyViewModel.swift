@@ -1,80 +1,39 @@
-// AstrophotographyViewModel.swift
 import SwiftUI
-import Combine
+import AVFoundation
 
 @MainActor
 final class AstrophotographyViewModel: ObservableObject {
+    // MARK: - Published Properties
     @Published var isSessionActive = false
-    @Published var iso: Float = 32 { didSet { cameraManager.setISO(iso) } }
-    @Published var shutterSpeed: Float = 0.1 { didSet { cameraManager.setExposureDuration(seconds: Double(shutterSpeed)) } } // теперь Float
-    @Published var focus: Float = 0.5 { didSet { cameraManager.setFocus(lensPosition: focus) } }
-    @Published var whiteBalanceKelvin: Float = 5000 { didSet { cameraManager.setWhiteBalance(tempKelvin: whiteBalanceKelvin) } }
-    @Published var intervalShots: Int = 10
-    @Published var intervalDelay: Double = 2.0
-    @Published var shutterDelaySeconds: Double = 2 { didSet { shutterDelay = shutterDelaySeconds } }
-    @Published var isLongExposureActive = false
-    @Published var longExposureDuration: Double = 60
-    
-    private let cameraManager = CameraManager()
-    private var cancellables = Set<AnyCancellable>()
-    private var shutterDelay: Double = 2
-    
-    init() {
-        bindCameraUpdates()
-    }
-    
-    private func bindCameraUpdates() {
-        cameraManager.$currentISO.assign(to: &$iso)
-        cameraManager.$currentExposureDuration
-            .map { Float($0.seconds) } // преобразуем в Float
-            .assign(to: &$shutterSpeed)
-        cameraManager.$currentLensPosition.assign(to: &$focus)
-    }
-    
-    func startSession() async {
-        let success = await cameraManager.setupSession()
-        if success {
-            cameraManager.startSession()
-            isSessionActive = true
-        }
-    }
-    
-    func stopSession() { cameraManager.stopSession(); isSessionActive = false }
-    
-    func captureWithDelay() {
-        Task {
-            try? await Task.sleep(nanoseconds: UInt64(shutterDelay * 1_000_000_000))
-            cameraManager.capturePhoto { data in
-                self.savePhoto(data)
-            }
-        }
-    }
-    
-    func startLongExposure() {
-        isLongExposureActive = true
-        cameraManager.startLongExposure(totalDuration: longExposureDuration) { data in
-            Task { @MainActor in
-                self.savePhoto(data)
-                self.isLongExposureActive = false
-            }
-        }
-    }
-    
-    func startIntervalometer() {
-        cameraManager.startIntervalometer(shots: intervalShots, delayBetween: intervalDelay) { data in
-            self.savePhoto(data)
-        }
-    }
-    
-    private func savePhoto(_ data: Data?) {
-        guard let data = data else { return }
-        let filename = UUID().uuidString + (data.isTIFF ? ".tiff" : ".dng")
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent(filename)
-        try? data.write(to: url)
-        print("Photo saved: \(url)")
-    }
-}
+    @Published var iso: Float = 32.0
+    @Published var shutterSpeedSeconds: Double = 0.1   // в секундах
+    @Published var focus: Float = 0.5
+    @Published var whiteBalanceKelvin: Float = 5000
 
-extension Data {
-    var isTIFF: Bool { self.starts(with: [0x49, 0x49, 0x2A, 0x00]) || self.starts(with: [0x4D, 0x4D, 0x00, 0x2A]) }
-}
+    // MARK: - Dependencies
+    private(set) var cameraManager = CameraManager()
+
+    // MARK: - Computed
+    var shutterSpeedCMTime: CMTime {
+        CMTime(seconds: shutterSpeedSeconds, preferredTimescale: 1000)
+    }
+
+    // MARK: - Public Methods
+    func startSession() async {
+        cameraManager.startSession()
+        isSessionActive = cameraManager.session.isRunning
+    }
+
+    func stopSession() {
+        cameraManager.stopSession()
+        isSessionActive = false
+    }
+
+    func updateExposure() {
+        cameraManager.setManualExposure(iso: iso, shutterSpeed: shutterSpeedCMTime)
+    }
+
+    func capturePhoto() {
+        cameraManager.capturePhoto()
+    }
+}ы

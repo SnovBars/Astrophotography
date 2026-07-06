@@ -1,4 +1,3 @@
-// CoreMotionManager.swift
 import CoreMotion
 import Combine
 
@@ -6,10 +5,10 @@ import Combine
 final class CoreMotionManager: ObservableObject {
     @Published var roll: Double = 0
     @Published var pitch: Double = 0
-    
+
     private let motionManager = CMMotionManager()
     private let queue = OperationQueue()
-    
+
     func startUpdates() {
         guard motionManager.isDeviceMotionAvailable else { return }
         motionManager.deviceMotionUpdateInterval = 1/30
@@ -21,6 +20,8 @@ final class CoreMotionManager: ObservableObject {
             }
         }
     }
-    
-    func stopUpdates() { motionManager.stopDeviceMotionUpdates() }
+
+    func stopUpdates() {
+        motionManager.stopDeviceMotionUpdates()
+    }
 }
