@@ -10,12 +10,10 @@ struct CameraView: View {
         ZStack {
             Color.black.ignoresSafeArea()
 
-            // Превью камеры
             CameraPreviewView(previewLayer: viewModel.cameraManager.previewLayer)
                 .ignoresSafeArea()
                 .overlay(alignment: .topLeading) { gridAndHorizonOverlay }
 
-            // Панель управления
             VStack {
                 Spacer()
                 controlPanel
@@ -36,15 +34,13 @@ struct CameraView: View {
             motionManager.stopUpdates()
             viewModel.stopSession()
         }
-        .onChange(of: viewModel.iso) { _ in viewModel.updateExposure() }
-        .onChange(of: viewModel.shutterSpeedSeconds) { _ in viewModel.updateExposure() }
+        .onChange(of: viewModel.iso) { viewModel.updateExposure() }
+        .onChange(of: viewModel.shutterSpeedSeconds) { viewModel.updateExposure() }
     }
 
-    // MARK: - Grid & Horizon
     private var gridAndHorizonOverlay: some View {
         GeometryReader { geo in
             ZStack {
-                // Сетка правила третей
                 Path { path in
                     let w = geo.size.width, h = geo.size.height
                     path.move(to: CGPoint(x: w/3, y: 0))
@@ -58,7 +54,6 @@ struct CameraView: View {
                 }
                 .stroke(Color.white.opacity(0.3), lineWidth: 1)
 
-                // Горизонт
                 VStack {
                     Text("⏤ \(Int(motionManager.roll))° ⏤")
                         .font(.caption)
@@ -73,7 +68,6 @@ struct CameraView: View {
         }
     }
 
-    // MARK: - Control Panel
     private var controlPanel: some View {
         VStack(spacing: 12) {
             HStack {

@@ -48,8 +48,10 @@ class CameraManager: NSObject, ObservableObject {
                 self.session.addOutput(self.photoOutput)
 
                 if #available(iOS 17.0, *) {
-                    // Берём первый поддерживаемый размер (обычно 12MP) для совместимости с ручной экспозицией
-                    self.photoOutput.maxPhotoDimensions = camera.activeFormat.supportedMaxPhotoDimensions.first ?? .zero
+                    // Безопасно берём первый поддерживаемый размер (обычно 12MP)
+                    if let maxDim = camera.activeFormat.supportedMaxPhotoDimensions.first {
+                        self.photoOutput.maxPhotoDimensions = maxDim
+                    }
                 }
             } else {
                 self.session.commitConfiguration()
@@ -87,7 +89,6 @@ class CameraManager: NSObject, ObservableObject {
         }
     }
 
-    // Ручные настройки ISO и выдержки
     func setManualExposure(iso: Float, shutterSpeed: CMTime) {
         guard let device = videoDeviceInput?.device else { return }
         do {
@@ -107,7 +108,6 @@ class CameraManager: NSObject, ObservableObject {
             guard let self = self else { return }
 
             let settings = AVCapturePhotoSettings()
-            // Приоритет скорости позволяет применять ручные ISO и выдержку
             settings.photoQualityPrioritization = .speed
 
             if #available(iOS 17.0, *) {
@@ -131,7 +131,6 @@ extension CameraManager: AVCapturePhotoCaptureDelegate {
             print("Не удалось сформировать UIImage")
             return
         }
-        // Сохранение в галерею (для теста)
         UIImageWriteToSavedPhotosAlbum(uiImage, nil, nil, nil)
         print("Астро-снимок сохранён!")
     }
