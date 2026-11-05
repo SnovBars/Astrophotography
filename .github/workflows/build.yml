@@ -77,14 +77,14 @@ jobs:
       - name: Generate Xcode Project
         run: xcodegen generate
 
-      # --- ДИАГНОСТИКА (можно оставить для будущих проверок) ---
+      # --- ДИАГНОСТИКА (полезно для проверки) ---
       - name: List available simulators and runtimes
         run: |
           echo "=== Доступные устройства ==="
           xcrun simctl list devices available
           echo "=== Установленные runtime'ы ==="
           xcrun simctl list runtimes
-      # ---------------------------------------------------------
+      # -----------------------------------------
 
       - name: Build for Simulator (Debug)
         run: |
@@ -101,7 +101,7 @@ jobs:
           # Загружаем актуальный симулятор iPhone 17
           xcrun simctl boot "iPhone 17" || echo "⚠️ Не удалось загрузить iPhone 17, возможно, он уже загружен"
           
-          # Ждем ПОЛНОЙ загрузки с увеличенным таймаутом (важно для CI)
+          # Ждем ПОЛНОЙ загрузки
           xcrun simctl bootstatus "iPhone 17" -b || true
           
           # Устанавливаем приложение
@@ -111,15 +111,28 @@ jobs:
       - name: Launch App and Capture Logs
         run: |
           echo "=== ЗАПУСК ПРИЛОЖЕНИЯ ===" > simulator.log
-          # Увеличиваем таймаут запуска, так как на CI возможны задержки
-          (timeout 60s xcrun simctl launch --console-pty booted com.nikita.astrocameramod >> simulator.log 2>&1) || true
+          
+          # Запускаем приложение в фоне и пишем вывод в лог
+          xcrun simctl launch --console-pty booted com.nikita.astrocameramod >> simulator.log 2>&1 &
+          APP_PID=$!
+          
+          # Ждем 15 секунд (даем время либо упасть, либо загрузиться)
+          sleep 15
+          
+          # Убиваем процесс (если приложение не упало само)
+          kill $APP_PID 2>/dev/null || true
+          
           echo "=== КОНЕЦ ЛОГОВ ===" >> simulator.log
 
       - name: Collect Crash Reports
         if: always()
         run: |
           mkdir -p CrashLogs
-          cp -R ~/Library/Logs/DiagnosticReports/* CrashLogs/ || true
+          # 1. Собираем отчеты с самого Mac (на всякий случай)
+          cp -R ~/Library/Logs/DiagnosticReports/* CrashLogs/ 2>/dev/null || true
+          
+          # 2. Собираем логи падений ИЗ СИМУЛЯТОРА (это самое важное)
+          find ~/Library/Developer/CoreSimulator/Devices -path "*/data/Library/Logs/CrashReporter/*" -type f -name "*.ips" -exec cp {} CrashLogs/ \; 2>/dev/null || true
 
       - name: Upload Simulator Logs
         if: always()
