@@ -37,11 +37,7 @@ final class AstrophotographyViewModel: ObservableObject {
 
     // MARK: - Camera lifecycle
     func prepareCamera() async throws {
-        // 1. Асинхронный запрос разрешения (это правильно)
         let granted = await AVCaptureDevice.requestAccess(for: .video)
-
-        // 2. ГАРАНТИРУЕМ, что все дальнейшие действия — в главном потоке.
-        // Если granted == false, бросаем ошибку.
         guard granted else {
             let status = AVCaptureDevice.authorizationStatus(for: .video)
             if status == .restricted {
@@ -50,7 +46,6 @@ final class AstrophotographyViewModel: ObservableObject {
             throw CameraError.permissionDenied
         }
 
-        // Теперь мы точно в главном потоке благодаря @MainActor
         if cameraManager.isSessionConfigured {
             await cameraManager.startSession()
         } else {

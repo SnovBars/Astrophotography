@@ -16,29 +16,19 @@ enum CameraError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .permissionDenied:
-            return "Доступ к камере отклонён. Разрешите его в Настройках iPhone → AstroPhoto Camera → Камера."
-        case .permissionRestricted:
-            return "Доступ к камере ограничен системными настройками (например, родительским контролем)."
-        case .noCamera:
-            return "На этом устройстве не найдена задняя камера."
-        case .cannotConfigureSession(let message):
-            return "Не удалось настроить камеру: \(message)"
-        case .cannotAddInput:
-            return "Не удалось подключить камеру к сессии."
-        case .cannotAddOutput:
-            return "Не удалось подключить фото-выход к сессии."
-        case .sessionNotConfigured:
-            return "Сессия камеры не была корректно настроена."
-        case .captureFailed(let message):
-            return "Не удалось сделать снимок: \(message)"
-        case .saveFailed(let message):
-            return "Не удалось сохранить снимок: \(message)"
+        case .permissionDenied: return "Доступ к камере отклонён."
+        case .permissionRestricted: return "Доступ к камере ограничен."
+        case .noCamera: return "Задняя камера не найдена."
+        case .cannotConfigureSession(let msg): return "Ошибка настройки: \(msg)"
+        case .cannotAddInput: return "Ошибка подключения входа."
+        case .cannotAddOutput: return "Ошибка подключения выхода."
+        case .sessionNotConfigured: return "Сессия не настроена."
+        case .captureFailed(let msg): return "Ошибка съёмки: \(msg)"
+        case .saveFailed(let msg): return "Ошибка сохранения: \(msg)"
         }
     }
 }
 
-// MARK: - Manager
 final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
     @Published private(set) var session = AVCaptureSession()
     @Published private(set) var previewLayer: AVCaptureVideoPreviewLayer?
@@ -52,25 +42,19 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
     private let continuationLock = NSLock()
     private var photoContinuation: CheckedContinuation<UIImage, Error>?
 
-    // MARK: - Permission
     static func currentCameraPermission() -> AVAuthorizationStatus {
         AVCaptureDevice.authorizationStatus(for: .video)
     }
 
     static func requestCameraPermission() async -> Bool {
         switch currentCameraPermission() {
-        case .authorized:
-            return true
-        case .notDetermined:
-            return await AVCaptureDevice.requestAccess(for: .video)
-        case .denied, .restricted:
-            return false
-        @unknown default:
-            return false
+        case .authorized: return true
+        case .notDetermined: return await AVCaptureDevice.requestAccess(for: .video)
+        case .denied, .restricted: return false
+        @unknown default: return false
         }
     }
 
-    // MARK: - Configure
     func configureSession() async throws {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             sessionQueue.async { [weak self] in
@@ -82,7 +66,6 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
                 self.session.beginConfiguration()
                 self.session.sessionPreset = .photo
 
-                // Очистка предыдущей конфигурации
                 for input in self.session.inputs { self.session.removeInput(input) }
                 for output in self.session.outputs { self.session.removeOutput(output) }
                 self.videoDeviceInput = nil
@@ -135,7 +118,6 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
         }
     }
 
-    // MARK: - Start / Stop
     func startSession() async {
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             sessionQueue.async { [weak self] in
@@ -167,7 +149,6 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
         }
     }
 
-    // MARK: - Exposure
     func setManualExposure(iso: Float, shutterSpeed: CMTime) {
         sessionQueue.async { [weak self] in
             guard let self = self, let device = self.videoDeviceInput?.device else { return }
@@ -187,7 +168,6 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
         }
     }
 
-    // MARK: - Capture
     func capturePhoto() async throws -> UIImage {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<UIImage, Error>) in
             continuationLock.lock()
@@ -226,9 +206,7 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
     }
 }
 
-// MARK: - AVCapturePhotoCaptureDelegate
 extension CameraManager: AVCapturePhotoCaptureDelegate {
-    // Убираем изоляцию главного актора, так как этот метод вызывается системой в фоне
     nonisolated func photoOutput(_ output: AVCapturePhotoOutput, didFinishProcessingPhoto photo: AVCapturePhoto, error: Error?) {
         if let error = error {
             finishCapture(with: .failure(CameraError.captureFailed(error.localizedDescription)))
