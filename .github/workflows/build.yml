@@ -9,7 +9,7 @@ on:
 
 jobs:
   build:
-    runs-on: macos-15  # Используем актуальную macOS 15 с Xcode 16+
+    runs-on: macos-26  # Используем актуальную macOS 15 с Xcode 16+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4

@@ -41,9 +41,9 @@ final class AstrophotographyViewModel: ObservableObject {
 
     // MARK: - Camera lifecycle
     func prepareCamera() async throws {
-        let granted = await CameraManager.requestCameraPermission()
+        let granted = await AVCaptureDevice.requestAccess(for: .video)
         guard granted else {
-            let status = CameraManager.currentCameraPermission()
+            let status = AVCaptureDevice.authorizationStatus(for: .video)
             if status == .restricted {
                 throw CameraError.permissionRestricted
             }

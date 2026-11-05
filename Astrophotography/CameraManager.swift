@@ -39,7 +39,7 @@ enum CameraError: LocalizedError {
 }
 
 // MARK: - Manager
-final class CameraManager: NSObject, ObservableObject {
+final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
     @Published private(set) var session = AVCaptureSession()
     @Published private(set) var previewLayer: AVCaptureVideoPreviewLayer?
     @Published private(set) var isSessionConfigured = false
@@ -49,9 +49,12 @@ final class CameraManager: NSObject, ObservableObject {
     private var videoDeviceInput: AVCaptureDeviceInput?
     private let sessionQueue = DispatchQueue(label: "com.nikita.camera.sessionQueue")
 
-    // Потокобезопасное хранение продолжения для capturePhoto
     private let continuationLock = NSLock()
     private var photoContinuation: CheckedContinuation<UIImage, Error>?
+
+    override init() {
+        super.init()
+    }
 
     // MARK: - Permission
     static func currentCameraPermission() -> AVAuthorizationStatus {
@@ -63,6 +66,7 @@ final class CameraManager: NSObject, ObservableObject {
         case .authorized:
             return true
         case .notDetermined:
+            // Используем асинхронный метод, чтобы избежать краша в iOS 18+
             return await AVCaptureDevice.requestAccess(for: .video)
         case .denied, .restricted:
             return false
