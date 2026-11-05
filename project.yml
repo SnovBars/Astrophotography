@@ -13,3 +13,5 @@ targets:
         UILaunchScreen: {}
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
+        NSCameraUsageDescription: "Нам нужна камера для съёмки звёзд и ночного неба."
+        NSPhotoLibraryAddUsageDescription: "Нам нужно разрешение, чтобы сохранять ваши астрономические снимки в галерею."
