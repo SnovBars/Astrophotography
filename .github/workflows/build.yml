@@ -42,8 +42,10 @@ jobs:
           key: ${{ runner.os }}-derived-data-release-${{ hashFiles('**/*.swift', '**/*.plist') }}
           restore-keys: ${{ runner.os }}-derived-data-release-
 
+      # ИЗМЕНЕННЫЙ ШАГ: Теперь мы сохраняем лог в файл
       - name: Clean and build for iOS device (Release)
         run: |
+          set -o pipefail
           xcodebuild clean build \
             -project Astrophotography.xcodeproj \
             -scheme Astrophotography \
@@ -55,9 +57,29 @@ jobs:
             PROVISIONING_PROFILE_SPECIFIER="" \
             ARCHS=arm64 \
             ONLY_ACTIVE_ARCH=NO \
-            -derivedDataPath DerivedData
+            -derivedDataPath DerivedData 2>&1 | tee xcodebuild.log
+
+      # НОВЫЙ ШАГ: Если сборка упала, выводим ошибки прямо в консоль GitHub
+      - name: Print Build Errors
+        if: failure()
+        run: |
+          echo "=================================================="
+          echo "❌ ОШИБКИ СБОРКИ (xcodebuild):"
+          echo "=================================================="
+          grep -i "error:" xcodebuild.log || echo "В логе нет строк со словом 'error:'"
+          echo "=================================================="
+
+      # НОВЫЙ ШАГ: Сохраняем полный лог как артефакт (чтобы скачать, если понадобится)
+      - name: Upload Build Log as Artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: XcodeBuild-Log
+          path: xcodebuild.log
+          if-no-files-found: warn
 
       - name: Create Payload folder and copy .app
+        if: success()
         run: |
           APP_PATH="DerivedData/Build/Products/Release-iphoneos/Astrophotography.app"
           if [ ! -d "$APP_PATH" ]; then
@@ -68,10 +90,12 @@ jobs:
           cp -R "$APP_PATH" Payload/
 
       - name: Package IPA
+        if: success()
         run: |
           zip -r Astrophotography.ipa Payload/
 
       - name: Upload IPA as artifact
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: Astrophotography-unsigned
@@ -102,7 +126,6 @@ jobs:
       - name: Generate Xcode Project
         run: xcodegen generate
 
-      # 🔥 УСКОРЕНИЕ: Запускаем симулятор ДО сборки, чтобы миграция шла в фоне
       - name: Boot Simulator (Background)
         run: |
           echo "Запускаем симулятор в фоне..."
@@ -139,15 +162,12 @@ jobs:
           echo "=== ЗАПУСК ПРИЛОЖЕНИЯ ===" > simulator.log
           echo "=== СИСТЕМНЫЙ ЛОГ СИМУЛЯТОРА ===" > unified.log
           
-          # ИСПРАВЛЕНО: Используем ПРАВИЛЬНЫЙ Bundle ID (com.nikita.Astrophotography)
           xcrun simctl launch --console booted com.nikita.Astrophotography >> simulator.log 2>&1 &
           APP_PID=$!
           
-          # Ждем 15 секунд (можно уменьшить до 10, если хотите еще быстрее)
           sleep 15
           kill $APP_PID 2>/dev/null || true
           
-          # Собираем логи за последние 60 секунд, включая TCC (разрешения)
           xcrun simctl spawn booted log show --last 60s --style compact \
             --predicate 'process == "Astrophotography" OR eventMessage CONTAINS "Astrophotography" OR eventMessage CONTAINS "com.nikita.Astrophotography" OR eventMessage CONTAINS "AVCapture" OR eventMessage CONTAINS "TCC" OR eventMessage CONTAINS "crash"' \
             >> unified.log 2>&1 || true
