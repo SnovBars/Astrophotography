@@ -26,22 +26,22 @@ final class AstrophotographyViewModel: ObservableObject {
     init() {
         cameraManager.$previewLayer
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] layer in
-                self?.previewLayer = layer
-            }
+            .sink { [weak self] layer in self?.previewLayer = layer }
             .store(in: &cancellables)
 
         cameraManager.$isSessionRunning
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] running in
-                self?.isSessionRunning = running
-            }
+            .sink { [weak self] running in self?.isSessionRunning = running }
             .store(in: &cancellables)
     }
 
     // MARK: - Camera lifecycle
     func prepareCamera() async throws {
+        // 1. Асинхронный запрос разрешения (это правильно)
         let granted = await AVCaptureDevice.requestAccess(for: .video)
+
+        // 2. ГАРАНТИРУЕМ, что все дальнейшие действия — в главном потоке.
+        // Если granted == false, бросаем ошибку.
         guard granted else {
             let status = AVCaptureDevice.authorizationStatus(for: .video)
             if status == .restricted {
@@ -50,13 +50,13 @@ final class AstrophotographyViewModel: ObservableObject {
             throw CameraError.permissionDenied
         }
 
+        // Теперь мы точно в главном потоке благодаря @MainActor
         if cameraManager.isSessionConfigured {
             await cameraManager.startSession()
         } else {
             try await cameraManager.configureSession()
             await cameraManager.startSession()
         }
-
         cameraManager.setManualExposure(iso: iso, shutterSpeed: shutterSpeedCMTime)
     }
 
@@ -95,9 +95,7 @@ final class AstrophotographyViewModel: ObservableObject {
         }
 
         guard granted else {
-            throw CameraError.saveFailed(
-                "Нет доступа к Фото. Разрешите сохранение снимков в Настройках iPhone."
-            )
+            throw CameraError.saveFailed("Нет доступа к Фото. Разрешите сохранение снимков в Настройках iPhone.")
         }
 
         try await PHPhotoLibrary.shared().performChanges {

@@ -39,7 +39,8 @@ enum CameraError: LocalizedError {
 }
 
 // MARK: - Manager
-final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
+@MainActor
+final class CameraManager: NSObject, ObservableObject {
     @Published private(set) var session = AVCaptureSession()
     @Published private(set) var previewLayer: AVCaptureVideoPreviewLayer?
     @Published private(set) var isSessionConfigured = false
@@ -52,10 +53,6 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
     private let continuationLock = NSLock()
     private var photoContinuation: CheckedContinuation<UIImage, Error>?
 
-    override init() {
-        super.init()
-    }
-
     // MARK: - Permission
     static func currentCameraPermission() -> AVAuthorizationStatus {
         AVCaptureDevice.authorizationStatus(for: .video)
@@ -66,7 +63,6 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
         case .authorized:
             return true
         case .notDetermined:
-            // Используем асинхронный метод, чтобы избежать краша в iOS 18+
             return await AVCaptureDevice.requestAccess(for: .video)
         case .denied, .restricted:
             return false
@@ -87,13 +83,9 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
                 self.session.beginConfiguration()
                 self.session.sessionPreset = .photo
 
-                // Сброс предыдущей конфигурации (на случай повторной попытки)
-                for input in self.session.inputs {
-                    self.session.removeInput(input)
-                }
-                for output in self.session.outputs {
-                    self.session.removeOutput(output)
-                }
+                // Очистка предыдущей конфигурации
+                for input in self.session.inputs { self.session.removeInput(input) }
+                for output in self.session.outputs { self.session.removeOutput(output) }
                 self.videoDeviceInput = nil
 
                 guard let camera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) else {
@@ -133,7 +125,7 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
 
                 self.session.commitConfiguration()
 
-                DispatchQueue.main.async {
+                Task { @MainActor in
                     let layer = AVCaptureVideoPreviewLayer(session: self.session)
                     layer.videoGravity = .resizeAspectFill
                     self.previewLayer = layer
@@ -146,6 +138,9 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
 
     // MARK: - Start / Stop
     func startSession() async {
+        // Небольшая задержка, чтобы дать сессии "успокоиться" после конфигурации
+        try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 сек
+
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             sessionQueue.async { [weak self] in
                 guard let self = self else {
@@ -182,20 +177,13 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
             guard let self = self, let device = self.videoDeviceInput?.device else { return }
             do {
                 try device.lockForConfiguration()
-
                 let minISO = device.activeFormat.minISO
                 let maxISO = device.activeFormat.maxISO
                 let clampedISO = max(minISO, min(iso, maxISO))
-
                 let minDuration = device.activeFormat.minExposureDuration
                 let maxDuration = device.activeFormat.maxExposureDuration
                 let clampedDuration = CMTimeMaximum(minDuration, CMTimeMinimum(shutterSpeed, maxDuration))
-
-                device.setExposureModeCustom(
-                    duration: clampedDuration,
-                    iso: clampedISO,
-                    completionHandler: nil
-                )
+                device.setExposureModeCustom(duration: clampedDuration, iso: clampedISO, completionHandler: nil)
                 device.unlockForConfiguration()
             } catch {
                 print("Exposure config error: \(error)")
@@ -208,9 +196,7 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<UIImage, Error>) in
             continuationLock.lock()
             let alreadyCapturing = (photoContinuation != nil)
-            if !alreadyCapturing {
-                photoContinuation = continuation
-            }
+            if !alreadyCapturing { photoContinuation = continuation }
             continuationLock.unlock()
 
             if alreadyCapturing {
@@ -220,18 +206,15 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
 
             sessionQueue.async { [weak self] in
                 guard let self = self else { return }
-
                 guard self.isSessionConfigured else {
                     self.finishCapture(with: .failure(CameraError.sessionNotConfigured))
                     return
                 }
-
                 let settings = AVCapturePhotoSettings()
                 settings.photoQualityPrioritization = .quality
                 if #available(iOS 17.0, *) {
                     settings.maxPhotoDimensions = self.photoOutput.maxPhotoDimensions
                 }
-
                 self.photoOutput.capturePhoto(with: settings, delegate: self)
             }
         }
@@ -242,24 +225,18 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
         let continuation = photoContinuation
         photoContinuation = nil
         continuationLock.unlock()
-
         continuation?.resume(with: result)
     }
 }
 
 // MARK: - AVCapturePhotoCaptureDelegate
 extension CameraManager: AVCapturePhotoCaptureDelegate {
-    func photoOutput(
-        _ output: AVCapturePhotoOutput,
-        didFinishProcessingPhoto photo: AVCapturePhoto,
-        error: Error?
-    ) {
+    func photoOutput(_ output: AVCapturePhotoOutput, didFinishProcessingPhoto photo: AVCapturePhoto, error: Error?) {
         if let error = error {
             finishCapture(with: .failure(CameraError.captureFailed(error.localizedDescription)))
             return
         }
-        guard let data = photo.fileDataRepresentation(),
-              let image = UIImage(data: data) else {
+        guard let data = photo.fileDataRepresentation(), let image = UIImage(data: data) else {
             finishCapture(with: .failure(CameraError.captureFailed("Не удалось сформировать изображение")))
             return
         }
