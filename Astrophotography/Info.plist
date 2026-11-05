@@ -28,6 +28,8 @@
         <string>UIInterfaceOrientationPortraitUpsideDown</string>
     </array>
     <key>NSCameraUsageDescription</key>
-    <string>Нам нужна камера для съемки звезд и ночного неба.</string>
+    <string>Нам нужна камера для съёмки звёзд и ночного неба.</string>
+    <key>NSPhotoLibraryAddUsageDescription</key>
+    <string>Нам нужно разрешение, чтобы сохранять ваши астрономические снимки в галерею.</string>
 </dict>
 </plist>
