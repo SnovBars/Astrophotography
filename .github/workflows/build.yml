@@ -1,4 +1,4 @@
-name: Build iOS IPA (unsigned)
+name: Build and Debug iOS App
 
 on:
   push:
@@ -8,8 +8,11 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
-    runs-on: macos-15  # Возвращаем стабильный macOS 15 с Xcode 16
+  # ---------------------------------------------------------
+  # ЗАДАЧА 1: Сборка .ipa для установки на реальный iPhone
+  # ---------------------------------------------------------
+  build-ipa:
+    runs-on: macos-15  # Стабильный macOS 15 с Xcode 16
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -56,3 +59,86 @@ jobs:
           name: Astrophotography-unsigned
           path: Astrophotography.ipa
           if-no-files-found: error
+
+  # ---------------------------------------------------------
+  # ЗАДАЧА 2: Запуск в симуляторе и сбор логов (Отладка)
+  # ---------------------------------------------------------
+  debug-simulator:
+    runs-on: macos-15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode Project
+        run: xcodegen generate
+
+      # Запускаем симулятор в фоне, чтобы он прогрелся, пока идет сборка
+      - name: Boot Simulator (Background)
+        run: |
+          echo "Запускаем симулятор iPhone 16 в фоне..."
+          xcrun simctl boot "iPhone 16" || true
+
+      - name: Build for Simulator (Debug)
+        run: |
+          xcodebuild clean build \
+            -project Astrophotography.xcodeproj \
+            -scheme Astrophotography \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -destination 'platform=iOS Simulator,name=iPhone 16' \
+            SWIFT_STRICT_CONCURRENCY=minimal \
+            -derivedDataPath DerivedDataSim
+
+      - name: Wait for Simulator and Install App
+        run: |
+          echo "Ожидаем полной загрузки симулятора..."
+          xcrun simctl bootstatus "iPhone 16" -b || true
+          
+          echo "Устанавливаем приложение..."
+          APP_PATH="DerivedDataSim/Build/Products/Debug-iphonesimulator/Astrophotography.app"
+          xcrun simctl install booted "$APP_PATH"
+          
+      - name: Launch App and Capture Unified Logs
+        run: |
+          echo "=== ЗАПУСК ПРИЛОЖЕНИЯ ===" > simulator.log
+          echo "=== СИСТЕМНЫЙ ЛОГ СИМУЛЯТОРА ===" > unified.log
+          
+          # Используем правильный Bundle ID
+          xcrun simctl launch --console booted com.nikita.Astrophotography >> simulator.log 2>&1 &
+          APP_PID=$!
+          
+          # Ждем 15 секунд
+          sleep 15
+          kill $APP_PID 2>/dev/null || true
+          
+          # Собираем логи за последние 60 секунд, включая разрешения (TCC) и камеру
+          xcrun simctl spawn booted log show --last 60s --style compact \
+            --predicate 'process == "Astrophotography" OR eventMessage CONTAINS "Astrophotography" OR eventMessage CONTAINS "com.nikita.Astrophotography" OR eventMessage CONTAINS "AVCapture" OR eventMessage CONTAINS "TCC" OR eventMessage CONTAINS "crash"' \
+            >> unified.log 2>&1 || true
+          
+          echo "=== КОНЕЦ ЛОГОВ ===" >> simulator.log
+          echo "=== КОНЕЦ UNIFIED LOG ===" >> unified.log
+
+      - name: Collect Any Crash Reports (Fallback)
+        if: always()
+        run: |
+          mkdir -p CrashLogs
+          cp -R ~/Library/Logs/DiagnosticReports/* CrashLogs/ 2>/dev/null || true
+          find ~/Library/Developer/CoreSimulator/Devices -path "*/data/Library/Logs/CrashReporter/*" -type f -name "*.ips" -exec cp {} CrashLogs/ \; 2>/dev/null || true
+          if [ -z "$(ls -A CrashLogs)" ]; then
+            echo "На GitHub-раннере .ips для симулятора не создаются. Смотри unified.log" > CrashLogs/README.txt
+          fi
+
+      - name: Upload Simulator Logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Simulator-Debug-Logs
+          path: |
+            simulator.log
+            unified.log
+            CrashLogs/
+          if-no-files-found: warn
