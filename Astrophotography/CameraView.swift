@@ -32,8 +32,8 @@ struct CameraView: View {
             motionManager.stopUpdates()
             viewModel.stopSession()
         }
-        .onChange(of: viewModel.iso) { _ in viewModel.updateExposure() }
-        .onChange(of: viewModel.shutterSpeedSeconds) { _ in viewModel.updateExposure() }
+        .onChange(of: viewModel.iso) { _, _ in viewModel.updateExposure() }
+        .onChange(of: viewModel.shutterSpeedSeconds) { _, _ in viewModel.updateExposure() }
     }
 
     // MARK: - Overlay
@@ -123,7 +123,7 @@ struct CameraView: View {
         VStack {
             Text("\(title): \(formatter(value.wrappedValue))")
                 .font(.caption)
-            Slider(value: value, in: range, step: step)
+            Slider(value: value, in: range, step: Value.Stride(step))
                 .tint(.white)
         }
     }
