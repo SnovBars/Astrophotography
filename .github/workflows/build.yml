@@ -1,4 +1,4 @@
-name: Build and Debug iOS App
+name: Build iOS IPA (unsigned)
 
 on:
   push:
@@ -8,26 +8,11 @@ on:
   workflow_dispatch:
 
 jobs:
-  # ---------------------------------------------------------
-  # ЗАДАЧА 1: Сборка .ipa для установки на реальный iPhone
-  # ---------------------------------------------------------
-  build-ipa:
-    runs-on: macos-26
+  build:
+    runs-on: macos-15  # Возвращаем стабильный macOS 15 с Xcode 16
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Check Xcode version
-        run: xcodebuild -version
-
-      - name: Cache Homebrew
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/Library/Caches/Homebrew
-            /opt/homebrew/Cellar
-          key: ${{ runner.os }}-brew-xcodegen-${{ hashFiles('**/project.yml') }}
-          restore-keys: ${{ runner.os }}-brew-
 
       - name: Install XcodeGen
         run: brew install xcodegen
@@ -35,17 +20,8 @@ jobs:
       - name: Generate Xcode Project
         run: xcodegen generate
 
-      - name: Cache DerivedData (Release)
-        uses: actions/cache@v4
-        with:
-          path: DerivedData
-          key: ${{ runner.os }}-derived-data-release-${{ hashFiles('**/*.swift', '**/*.plist') }}
-          restore-keys: ${{ runner.os }}-derived-data-release-
-
-      # ИЗМЕНЕННЫЙ ШАГ: Теперь мы сохраняем лог в файл
       - name: Clean and build for iOS device (Release)
         run: |
-          set -o pipefail
           xcodebuild clean build \
             -project Astrophotography.xcodeproj \
             -scheme Astrophotography \
@@ -57,29 +33,10 @@ jobs:
             PROVISIONING_PROFILE_SPECIFIER="" \
             ARCHS=arm64 \
             ONLY_ACTIVE_ARCH=NO \
-            -derivedDataPath DerivedData 2>&1 | tee xcodebuild.log
-
-      # НОВЫЙ ШАГ: Если сборка упала, выводим ошибки прямо в консоль GitHub
-      - name: Print Build Errors
-        if: failure()
-        run: |
-          echo "=================================================="
-          echo "❌ ОШИБКИ СБОРКИ (xcodebuild):"
-          echo "=================================================="
-          grep -i "error:" xcodebuild.log || echo "В логе нет строк со словом 'error:'"
-          echo "=================================================="
-
-      # НОВЫЙ ШАГ: Сохраняем полный лог как артефакт (чтобы скачать, если понадобится)
-      - name: Upload Build Log as Artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: XcodeBuild-Log
-          path: xcodebuild.log
-          if-no-files-found: warn
+            SWIFT_STRICT_CONCURRENCY=minimal \
+            -derivedDataPath DerivedData
 
       - name: Create Payload folder and copy .app
-        if: success()
         run: |
           APP_PATH="DerivedData/Build/Products/Release-iphoneos/Astrophotography.app"
           if [ ! -d "$APP_PATH" ]; then
@@ -90,108 +47,12 @@ jobs:
           cp -R "$APP_PATH" Payload/
 
       - name: Package IPA
-        if: success()
         run: |
           zip -r Astrophotography.ipa Payload/
 
       - name: Upload IPA as artifact
-        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: Astrophotography-unsigned
           path: Astrophotography.ipa
           if-no-files-found: error
-
-  # ---------------------------------------------------------
-  # ЗАДАЧА 2: Ускоренный запуск в симуляторе (Отладка)
-  # ---------------------------------------------------------
-  debug-simulator:
-    runs-on: macos-26
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Cache Homebrew
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/Library/Caches/Homebrew
-            /opt/homebrew/Cellar
-          key: ${{ runner.os }}-brew-xcodegen-${{ hashFiles('**/project.yml') }}
-          restore-keys: ${{ runner.os }}-brew-
-
-      - name: Install XcodeGen
-        run: brew install xcodegen
-
-      - name: Generate Xcode Project
-        run: xcodegen generate
-
-      - name: Boot Simulator (Background)
-        run: |
-          echo "Запускаем симулятор в фоне..."
-          xcrun simctl boot "iPhone 17" || true
-
-      - name: Cache DerivedData (Debug)
-        uses: actions/cache@v4
-        with:
-          path: DerivedDataSim
-          key: ${{ runner.os }}-derived-data-debug-${{ hashFiles('**/*.swift', '**/*.plist') }}
-          restore-keys: ${{ runner.os }}-derived-data-debug-
-
-      - name: Build for Simulator (Debug)
-        run: |
-          xcodebuild clean build \
-            -project Astrophotography.xcodeproj \
-            -scheme Astrophotography \
-            -configuration Debug \
-            -sdk iphonesimulator \
-            -destination 'platform=iOS Simulator,name=iPhone 17' \
-            -derivedDataPath DerivedDataSim
-
-      - name: Wait for Simulator and Install App
-        run: |
-          echo "Ожидаем полной загрузки симулятора..."
-          xcrun simctl bootstatus "iPhone 17" -b || true
-          
-          echo "Устанавливаем приложение..."
-          APP_PATH="DerivedDataSim/Build/Products/Debug-iphonesimulator/Astrophotography.app"
-          xcrun simctl install booted "$APP_PATH"
-          
-      - name: Launch App and Capture Unified Logs
-        run: |
-          echo "=== ЗАПУСК ПРИЛОЖЕНИЯ ===" > simulator.log
-          echo "=== СИСТЕМНЫЙ ЛОГ СИМУЛЯТОРА ===" > unified.log
-          
-          xcrun simctl launch --console booted com.nikita.Astrophotography >> simulator.log 2>&1 &
-          APP_PID=$!
-          
-          sleep 15
-          kill $APP_PID 2>/dev/null || true
-          
-          xcrun simctl spawn booted log show --last 60s --style compact \
-            --predicate 'process == "Astrophotography" OR eventMessage CONTAINS "Astrophotography" OR eventMessage CONTAINS "com.nikita.Astrophotography" OR eventMessage CONTAINS "AVCapture" OR eventMessage CONTAINS "TCC" OR eventMessage CONTAINS "crash"' \
-            >> unified.log 2>&1 || true
-          
-          echo "=== КОНЕЦ ЛОГОВ ===" >> simulator.log
-          echo "=== КОНЕЦ UNIFIED LOG ===" >> unified.log
-
-      - name: Collect Any Crash Reports (Fallback)
-        if: always()
-        run: |
-          mkdir -p CrashLogs
-          cp -R ~/Library/Logs/DiagnosticReports/* CrashLogs/ 2>/dev/null || true
-          find ~/Library/Developer/CoreSimulator/Devices -path "*/data/Library/Logs/CrashReporter/*" -type f -name "*.ips" -exec cp {} CrashLogs/ \; 2>/dev/null || true
-          if [ -z "$(ls -A CrashLogs)" ]; then
-            echo "На GitHub-раннере .ips для симулятора не создаются. Смотри unified.log" > CrashLogs/README.txt
-          fi
-
-      - name: Upload Simulator Logs
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: Simulator-Debug-Logs
-          path: |
-            simulator.log
-            unified.log
-            CrashLogs/
-          if-no-files-found: warn
