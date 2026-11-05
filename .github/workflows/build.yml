@@ -1,4 +1,4 @@
-name: Build iOS IPA (unsigned)
+name: Build and Debug iOS App
 
 on:
   push:
@@ -8,14 +8,17 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
-    runs-on: macos-26  # Используем актуальную macOS 15 с Xcode 16+
+  # ---------------------------------------------------------
+  # ЗАДАЧА 1: Сборка .ipa для установки на реальный iPhone
+  # ---------------------------------------------------------
+  build-ipa:
+    runs-on: macos-26  # Используем актуальный macOS 26 с Xcode 26
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Check Xcode version
-        run: xcodebuild -version  # Просто проверяем, какая версия Xcode стоит по умолчанию
+        run: xcodebuild -version
 
       - name: Install XcodeGen
         run: brew install xcodegen
@@ -58,3 +61,63 @@ jobs:
           name: Astrophotography-unsigned
           path: Astrophotography.ipa
           if-no-files-found: error
+
+  # ---------------------------------------------------------
+  # ЗАДАЧА 2: Запуск в симуляторе и сбор логов (Отладка)
+  # ---------------------------------------------------------
+  debug-simulator:
+    runs-on: macos-26
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode Project
+        run: xcodegen generate
+
+      - name: Build for Simulator (Debug)
+        run: |
+          xcodebuild clean build \
+            -project Astrophotography.xcodeproj \
+            -scheme Astrophotography \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -derivedDataPath DerivedDataSim
+
+      - name: Boot Simulator and Install App
+        run: |
+          # Загружаем базовый симулятор iPhone 15
+          xcrun simctl boot "iPhone 15" || true
+          
+          # Ждем, пока загрузится
+          xcrun simctl bootstatus "iPhone 15" -b || true
+          
+          # Устанавливаем приложение
+          APP_PATH="DerivedDataSim/Build/Products/Debug-iphonesimulator/Astrophotography.app"
+          xcrun simctl install booted "$APP_PATH"
+          
+      - name: Launch App and Capture Logs
+        run: |
+          # Запускаем приложение и собираем консольные логи
+          echo "=== ЗАПУСК ПРИЛОЖЕНИЯ ===" > simulator.log
+          (timeout 15s xcrun simctl launch --console-pty booted com.nikita.astrocameramod >> simulator.log 2>&1) || true
+          echo "=== КОНЕЦ ЛОГОВ ===" >> simulator.log
+
+      - name: Collect Crash Reports
+        if: always()
+        run: |
+          # Собираем системные отчеты о падениях
+          mkdir -p CrashLogs
+          cp -R ~/Library/Logs/DiagnosticReports/* CrashLogs/ || true
+
+      - name: Upload Simulator Logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Simulator-Debug-Logs
+          path: |
+            simulator.log
+            CrashLogs/
+          if-no-files-found: warn
