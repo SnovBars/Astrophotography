@@ -71,7 +71,16 @@ struct CameraView: View {
     private var controlPanel: some View {
         VStack(spacing: 12) {
             HStack {
-                controlSlider(title: "ISO", value: $viewModel.iso, range: 16...800, step: 1)
+                controlSlider(
+                    title: "ISO",
+                    value: Binding(
+                        get: { Double(viewModel.iso) },
+                        set: { viewModel.iso = Float($0) }
+                    ),
+                    range: 16...800,
+                    step: 1,
+                    formatter: { String(format: "%.0f", $0) }
+                )
                 controlSlider(
                     title: "Shutter",
                     value: $viewModel.shutterSpeedSeconds,
@@ -113,17 +122,18 @@ struct CameraView: View {
         }
     }
 
-    private func controlSlider<Value: BinaryFloatingPoint>(
+    // Только Double — без generic, без сюрпризов
+    private func controlSlider(
         title: String,
-        value: Binding<Value>,
-        range: ClosedRange<Value>,
-        step: Value,
-        formatter: @escaping (Value) -> String = { "\($0)" }
+        value: Binding<Double>,
+        range: ClosedRange<Double>,
+        step: Double,
+        formatter: @escaping (Double) -> String = { "\($0)" }
     ) -> some View {
         VStack {
             Text("\(title): \(formatter(value.wrappedValue))")
                 .font(.caption)
-            Slider(value: value, in: range, step: Value.Stride(step))
+            Slider(value: value, in: range, step: step)
                 .tint(.white)
         }
     }
