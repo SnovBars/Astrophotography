@@ -39,8 +39,7 @@ enum CameraError: LocalizedError {
 }
 
 // MARK: - Manager
-@MainActor
-final class CameraManager: NSObject, ObservableObject {
+final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
     @Published private(set) var session = AVCaptureSession()
     @Published private(set) var previewLayer: AVCaptureVideoPreviewLayer?
     @Published private(set) var isSessionConfigured = false
@@ -125,7 +124,7 @@ final class CameraManager: NSObject, ObservableObject {
 
                 self.session.commitConfiguration()
 
-                Task { @MainActor in
+                DispatchQueue.main.async {
                     let layer = AVCaptureVideoPreviewLayer(session: self.session)
                     layer.videoGravity = .resizeAspectFill
                     self.previewLayer = layer
@@ -138,9 +137,6 @@ final class CameraManager: NSObject, ObservableObject {
 
     // MARK: - Start / Stop
     func startSession() async {
-        // Небольшая задержка, чтобы дать сессии "успокоиться" после конфигурации
-        try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 сек
-
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             sessionQueue.async { [weak self] in
                 guard let self = self else {
@@ -225,13 +221,15 @@ final class CameraManager: NSObject, ObservableObject {
         let continuation = photoContinuation
         photoContinuation = nil
         continuationLock.unlock()
+
         continuation?.resume(with: result)
     }
 }
 
 // MARK: - AVCapturePhotoCaptureDelegate
 extension CameraManager: AVCapturePhotoCaptureDelegate {
-    func photoOutput(_ output: AVCapturePhotoOutput, didFinishProcessingPhoto photo: AVCapturePhoto, error: Error?) {
+    // Убираем изоляцию главного актора, так как этот метод вызывается системой в фоне
+    nonisolated func photoOutput(_ output: AVCapturePhotoOutput, didFinishProcessingPhoto photo: AVCapturePhoto, error: Error?) {
         if let error = error {
             finishCapture(with: .failure(CameraError.captureFailed(error.localizedDescription)))
             return
