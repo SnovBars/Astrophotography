@@ -2,80 +2,160 @@ import AVFoundation
 import UIKit
 import Combine
 
-class CameraManager: NSObject, ObservableObject {
-    @Published var session = AVCaptureSession()
-    @Published var previewLayer: AVCaptureVideoPreviewLayer?
-    @Published var isSessionConfigured = false
+// MARK: - Errors
+enum CameraError: LocalizedError {
+    case permissionDenied
+    case permissionRestricted
+    case noCamera
+    case cannotConfigureSession(String)
+    case cannotAddInput
+    case cannotAddOutput
+    case sessionNotConfigured
+    case captureFailed(String)
+    case saveFailed(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .permissionDenied:
+            return "Доступ к камере отклонён. Разрешите его в Настройках iPhone → AstroPhoto Camera → Камера."
+        case .permissionRestricted:
+            return "Доступ к камере ограничен системными настройками (например, родительским контролем)."
+        case .noCamera:
+            return "На этом устройстве не найдена задняя камера."
+        case .cannotConfigureSession(let message):
+            return "Не удалось настроить камеру: \(message)"
+        case .cannotAddInput:
+            return "Не удалось подключить камеру к сессии."
+        case .cannotAddOutput:
+            return "Не удалось подключить фото-выход к сессии."
+        case .sessionNotConfigured:
+            return "Сессия камеры не была корректно настроена."
+        case .captureFailed(let message):
+            return "Не удалось сделать снимок: \(message)"
+        case .saveFailed(let message):
+            return "Не удалось сохранить снимок: \(message)"
+        }
+    }
+}
+
+// MARK: - Manager
+final class CameraManager: NSObject, ObservableObject {
+    @Published private(set) var session = AVCaptureSession()
+    @Published private(set) var previewLayer: AVCaptureVideoPreviewLayer?
+    @Published private(set) var isSessionConfigured = false
+    @Published private(set) var isSessionRunning = false
 
     private let photoOutput = AVCapturePhotoOutput()
     private var videoDeviceInput: AVCaptureDeviceInput?
     private let sessionQueue = DispatchQueue(label: "com.nikita.camera.sessionQueue")
 
-    override init() {
-        super.init()
-        configureSession()
+    // Потокобезопасное хранение продолжения для capturePhoto
+    private let continuationLock = NSLock()
+    private var photoContinuation: CheckedContinuation<UIImage, Error>?
+
+    // MARK: - Permission
+    static func currentCameraPermission() -> AVAuthorizationStatus {
+        AVCaptureDevice.authorizationStatus(for: .video)
     }
 
-    private func configureSession() {
-        sessionQueue.async { [weak self] in
-            guard let self = self else { return }
+    static func requestCameraPermission() async -> Bool {
+        switch currentCameraPermission() {
+        case .authorized:
+            return true
+        case .notDetermined:
+            return await AVCaptureDevice.requestAccess(for: .video)
+        case .denied, .restricted:
+            return false
+        @unknown default:
+            return false
+        }
+    }
 
-            self.session.beginConfiguration()
-            self.session.sessionPreset = .photo
-
-            guard let camera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) else {
-                print("Ошибка: Камера не найдена.")
-                self.session.commitConfiguration()
-                return
-            }
-
-            do {
-                let input = try AVCaptureDeviceInput(device: camera)
-                if self.session.canAddInput(input) {
-                    self.session.addInput(input)
-                    self.videoDeviceInput = input
-                } else {
-                    self.session.commitConfiguration()
+    // MARK: - Configure
+    func configureSession() async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            sessionQueue.async { [weak self] in
+                guard let self = self else {
+                    continuation.resume(throwing: CameraError.cannotConfigureSession("Manager deallocated"))
                     return
                 }
-            } catch {
-                print("Ошибка добавления входа: \(error)")
-                self.session.commitConfiguration()
-                return
-            }
 
-            if self.session.canAddOutput(self.photoOutput) {
-                self.session.addOutput(self.photoOutput)
+                self.session.beginConfiguration()
+                self.session.sessionPreset = .photo
 
-                if #available(iOS 17.0, *) {
-                    // Безопасно берём первый поддерживаемый размер (обычно 12MP)
-                    if let maxDim = camera.activeFormat.supportedMaxPhotoDimensions.first {
-                        self.photoOutput.maxPhotoDimensions = maxDim
-                    }
+                // Сброс предыдущей конфигурации (на случай повторной попытки)
+                for input in self.session.inputs {
+                    self.session.removeInput(input)
                 }
-            } else {
+                for output in self.session.outputs {
+                    self.session.removeOutput(output)
+                }
+                self.videoDeviceInput = nil
+
+                guard let camera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) else {
+                    self.session.commitConfiguration()
+                    continuation.resume(throwing: CameraError.noCamera)
+                    return
+                }
+
+                do {
+                    let input = try AVCaptureDeviceInput(device: camera)
+                    if self.session.canAddInput(input) {
+                        self.session.addInput(input)
+                        self.videoDeviceInput = input
+                    } else {
+                        self.session.commitConfiguration()
+                        continuation.resume(throwing: CameraError.cannotAddInput)
+                        return
+                    }
+                } catch {
+                    self.session.commitConfiguration()
+                    continuation.resume(throwing: CameraError.cannotConfigureSession(error.localizedDescription))
+                    return
+                }
+
+                if self.session.canAddOutput(self.photoOutput) {
+                    self.session.addOutput(self.photoOutput)
+                    if #available(iOS 17.0, *) {
+                        if let maxDim = camera.activeFormat.supportedMaxPhotoDimensions.first {
+                            self.photoOutput.maxPhotoDimensions = maxDim
+                        }
+                    }
+                } else {
+                    self.session.commitConfiguration()
+                    continuation.resume(throwing: CameraError.cannotAddOutput)
+                    return
+                }
+
                 self.session.commitConfiguration()
-                return
-            }
 
-            self.session.commitConfiguration()
-
-            DispatchQueue.main.async {
-                let previewLayer = AVCaptureVideoPreviewLayer(session: self.session)
-                previewLayer.videoGravity = .resizeAspectFill
-                self.previewLayer = previewLayer
-                self.isSessionConfigured = true
-                self.startSession()
+                DispatchQueue.main.async {
+                    let layer = AVCaptureVideoPreviewLayer(session: self.session)
+                    layer.videoGravity = .resizeAspectFill
+                    self.previewLayer = layer
+                    self.isSessionConfigured = true
+                    continuation.resume()
+                }
             }
         }
     }
 
-    func startSession() {
-        sessionQueue.async { [weak self] in
-            guard let self = self else { return }
-            guard self.isSessionConfigured else { return }
-            if !self.session.isRunning {
-                self.session.startRunning()
+    // MARK: - Start / Stop
+    func startSession() async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            sessionQueue.async { [weak self] in
+                guard let self = self else {
+                    DispatchQueue.main.async { continuation.resume() }
+                    return
+                }
+                if !self.session.isRunning {
+                    self.session.startRunning()
+                }
+                let running = self.session.isRunning
+                DispatchQueue.main.async {
+                    self.isSessionRunning = running
+                    continuation.resume()
+                }
             }
         }
     }
@@ -86,52 +166,99 @@ class CameraManager: NSObject, ObservableObject {
             if self.session.isRunning {
                 self.session.stopRunning()
             }
+            DispatchQueue.main.async {
+                self.isSessionRunning = false
+            }
         }
     }
 
+    // MARK: - Exposure
     func setManualExposure(iso: Float, shutterSpeed: CMTime) {
-        guard let device = videoDeviceInput?.device else { return }
-        do {
-            try device.lockForConfiguration()
-            let minISO = device.activeFormat.minISO
-            let maxISO = device.activeFormat.maxISO
-            let clampedISO = max(minISO, min(iso, maxISO))
-            device.setExposureModeCustom(duration: shutterSpeed, iso: clampedISO, completionHandler: nil)
-            device.unlockForConfiguration()
-        } catch {
-            print("Ошибка блокировки конфигурации: \(error)")
+        sessionQueue.async { [weak self] in
+            guard let self = self, let device = self.videoDeviceInput?.device else { return }
+            do {
+                try device.lockForConfiguration()
+
+                let minISO = device.activeFormat.minISO
+                let maxISO = device.activeFormat.maxISO
+                let clampedISO = max(minISO, min(iso, maxISO))
+
+                let minDuration = device.activeFormat.minExposureDuration
+                let maxDuration = device.activeFormat.maxExposureDuration
+                let clampedDuration = CMTimeMaximum(minDuration, CMTimeMinimum(shutterSpeed, maxDuration))
+
+                device.setExposureModeCustom(
+                    duration: clampedDuration,
+                    iso: clampedISO,
+                    completionHandler: nil
+                )
+                device.unlockForConfiguration()
+            } catch {
+                print("Exposure config error: \(error)")
+            }
         }
     }
 
-    func capturePhoto() {
-        sessionQueue.async { [weak self] in
-            guard let self = self else { return }
+    // MARK: - Capture
+    func capturePhoto() async throws -> UIImage {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<UIImage, Error>) in
+            continuationLock.lock()
+            let alreadyCapturing = (photoContinuation != nil)
+            if !alreadyCapturing {
+                photoContinuation = continuation
+            }
+            continuationLock.unlock()
 
-            let settings = AVCapturePhotoSettings()
-            settings.photoQualityPrioritization = .speed
-
-            if #available(iOS 17.0, *) {
-                settings.maxPhotoDimensions = self.photoOutput.maxPhotoDimensions
+            if alreadyCapturing {
+                continuation.resume(throwing: CameraError.captureFailed("Съёмка уже выполняется"))
+                return
             }
 
-            self.photoOutput.capturePhoto(with: settings, delegate: self)
+            sessionQueue.async { [weak self] in
+                guard let self = self else { return }
+
+                guard self.isSessionConfigured else {
+                    self.finishCapture(with: .failure(CameraError.sessionNotConfigured))
+                    return
+                }
+
+                let settings = AVCapturePhotoSettings()
+                settings.photoQualityPrioritization = .quality
+                if #available(iOS 17.0, *) {
+                    settings.maxPhotoDimensions = self.photoOutput.maxPhotoDimensions
+                }
+
+                self.photoOutput.capturePhoto(with: settings, delegate: self)
+            }
         }
+    }
+
+    private func finishCapture(with result: Result<UIImage, Error>) {
+        continuationLock.lock()
+        let continuation = photoContinuation
+        photoContinuation = nil
+        continuationLock.unlock()
+
+        continuation?.resume(with: result)
     }
 }
 
 // MARK: - AVCapturePhotoCaptureDelegate
 extension CameraManager: AVCapturePhotoCaptureDelegate {
-    func photoOutput(_ output: AVCapturePhotoOutput, didFinishProcessingPhoto photo: AVCapturePhoto, error: Error?) {
+    func photoOutput(
+        _ output: AVCapturePhotoOutput,
+        didFinishProcessingPhoto photo: AVCapturePhoto,
+        error: Error?
+    ) {
         if let error = error {
-            print("Ошибка обработки кадра: \(error)")
+            finishCapture(with: .failure(CameraError.captureFailed(error.localizedDescription)))
             return
         }
-        guard let imageData = photo.fileDataRepresentation(),
-              let uiImage = UIImage(data: imageData) else {
-            print("Не удалось сформировать UIImage")
+        guard let data = photo.fileDataRepresentation(),
+              let image = UIImage(data: data) else {
+            finishCapture(with: .failure(CameraError.captureFailed("Не удалось сформировать изображение")))
             return
         }
-        UIImageWriteToSavedPhotosAlbum(uiImage, nil, nil, nil)
-        print("Астро-снимок сохранён!")
+        finishCapture(with: .success(image))
     }
 }
