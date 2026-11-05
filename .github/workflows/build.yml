@@ -12,7 +12,7 @@ jobs:
   # ЗАДАЧА 1: Сборка .ipa для установки на реальный iPhone
   # ---------------------------------------------------------
   build-ipa:
-    runs-on: macos-26  # Используем актуальный macOS 26 с Xcode 26
+    runs-on: macos-26  # Актуальный macOS 26 с Xcode 26
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -101,38 +101,46 @@ jobs:
           # Загружаем актуальный симулятор iPhone 17
           xcrun simctl boot "iPhone 17" || echo "⚠️ Не удалось загрузить iPhone 17, возможно, он уже загружен"
           
-          # Ждем ПОЛНОЙ загрузки
+          # Ждем ПОЛНОЙ загрузки (миграция данных может занять время)
           xcrun simctl bootstatus "iPhone 17" -b || true
           
           # Устанавливаем приложение
           APP_PATH="DerivedDataSim/Build/Products/Debug-iphonesimulator/Astrophotography.app"
           xcrun simctl install booted "$APP_PATH"
           
-      - name: Launch App and Capture Logs
+      - name: Launch App and Capture Unified Logs
         run: |
           echo "=== ЗАПУСК ПРИЛОЖЕНИЯ ===" > simulator.log
+          echo "=== СИСТЕМНЫЙ ЛОГ СИМУЛЯТОРА ===" > unified.log
           
-          # Запускаем приложение в фоне и пишем вывод в лог
-          xcrun simctl launch --console-pty booted com.nikita.astrocameramod >> simulator.log 2>&1 &
+          # 1. Запускаем приложение в фоне (так как timeout в macOS нет)
+          xcrun simctl launch --console booted com.nikita.astrocameramod >> simulator.log 2>&1 &
           APP_PID=$!
           
-          # Ждем 15 секунд (даем время либо упасть, либо загрузиться)
+          # 2. Ждем 15 секунд
           sleep 15
           
-          # Убиваем процесс (если приложение не упало само)
+          # 3. Принудительно завершаем, если еще работает
           kill $APP_PID 2>/dev/null || true
           
+          # 4. Собираем unified log за последние 60 секунд.
+          # Добавлен фильтр TCC (Transparency, Consent, and Control) — это логи разрешений!
+          xcrun simctl spawn booted log show --last 60s --style compact \
+            --predicate 'process == "Astrophotography" OR eventMessage CONTAINS "Astrophotography" OR eventMessage CONTAINS "com.nikita.astrocameramod" OR eventMessage CONTAINS "AVCapture" OR eventMessage CONTAINS "TCC" OR eventMessage CONTAINS "crash"' \
+            >> unified.log 2>&1 || true
+          
           echo "=== КОНЕЦ ЛОГОВ ===" >> simulator.log
+          echo "=== КОНЕЦ UNIFIED LOG ===" >> unified.log
 
-      - name: Collect Crash Reports
+      - name: Collect Any Crash Reports (Fallback)
         if: always()
         run: |
           mkdir -p CrashLogs
-          # 1. Собираем отчеты с самого Mac (на всякий случай)
           cp -R ~/Library/Logs/DiagnosticReports/* CrashLogs/ 2>/dev/null || true
-          
-          # 2. Собираем логи падений ИЗ СИМУЛЯТОРА (это самое важное)
           find ~/Library/Developer/CoreSimulator/Devices -path "*/data/Library/Logs/CrashReporter/*" -type f -name "*.ips" -exec cp {} CrashLogs/ \; 2>/dev/null || true
+          if [ -z "$(ls -A CrashLogs)" ]; then
+            echo "На GitHub-раннере .ips для симулятора не создаются. Смотри unified.log" > CrashLogs/README.txt
+          fi
 
       - name: Upload Simulator Logs
         if: always()
@@ -141,5 +149,6 @@ jobs:
           name: Simulator-Debug-Logs
           path: |
             simulator.log
+            unified.log
             CrashLogs/
           if-no-files-found: warn
