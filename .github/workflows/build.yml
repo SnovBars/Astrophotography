@@ -77,14 +77,14 @@ jobs:
       - name: Generate Xcode Project
         run: xcodegen generate
 
-      # --- ДИАГНОСТИКА ---
+      # --- ДИАГНОСТИКА (можно оставить для будущих проверок) ---
       - name: List available simulators and runtimes
         run: |
           echo "=== Доступные устройства ==="
           xcrun simctl list devices available
           echo "=== Установленные runtime'ы ==="
           xcrun simctl list runtimes
-      # -------------------
+      # ---------------------------------------------------------
 
       - name: Build for Simulator (Debug)
         run: |
@@ -93,15 +93,16 @@ jobs:
             -scheme Astrophotography \
             -configuration Debug \
             -sdk iphonesimulator \
+            -destination 'platform=iOS Simulator,name=iPhone 17' \
             -derivedDataPath DerivedDataSim
 
       - name: Boot Simulator and Install App
         run: |
-          # Пытаемся загрузить iPhone 15, но не прерываем шаг, если его нет
-          xcrun simctl boot "iPhone 15" || echo "⚠️ iPhone 15 не найден, пробуем другой..."
+          # Загружаем актуальный симулятор iPhone 17
+          xcrun simctl boot "iPhone 17" || echo "⚠️ Не удалось загрузить iPhone 17, возможно, он уже загружен"
           
-          # Ждем загрузки с таймаутом (например, 2 минуты), чтобы избежать зависания
-          timeout 120s xcrun simctl bootstatus "iPhone 15" -b || true
+          # Ждем ПОЛНОЙ загрузки с увеличенным таймаутом (важно для CI)
+          xcrun simctl bootstatus "iPhone 17" -b || true
           
           # Устанавливаем приложение
           APP_PATH="DerivedDataSim/Build/Products/Debug-iphonesimulator/Astrophotography.app"
@@ -110,7 +111,8 @@ jobs:
       - name: Launch App and Capture Logs
         run: |
           echo "=== ЗАПУСК ПРИЛОЖЕНИЯ ===" > simulator.log
-          (timeout 15s xcrun simctl launch --console-pty booted com.nikita.astrocameramod >> simulator.log 2>&1) || true
+          # Увеличиваем таймаут запуска, так как на CI возможны задержки
+          (timeout 60s xcrun simctl launch --console-pty booted com.nikita.astrocameramod >> simulator.log 2>&1) || true
           echo "=== КОНЕЦ ЛОГОВ ===" >> simulator.log
 
       - name: Collect Crash Reports
