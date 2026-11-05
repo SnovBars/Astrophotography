@@ -77,6 +77,15 @@ jobs:
       - name: Generate Xcode Project
         run: xcodegen generate
 
+      # --- ДИАГНОСТИКА ---
+      - name: List available simulators and runtimes
+        run: |
+          echo "=== Доступные устройства ==="
+          xcrun simctl list devices available
+          echo "=== Установленные runtime'ы ==="
+          xcrun simctl list runtimes
+      # -------------------
+
       - name: Build for Simulator (Debug)
         run: |
           xcodebuild clean build \
@@ -88,11 +97,11 @@ jobs:
 
       - name: Boot Simulator and Install App
         run: |
-          # Загружаем базовый симулятор iPhone 15
-          xcrun simctl boot "iPhone 15" || true
+          # Пытаемся загрузить iPhone 15, но не прерываем шаг, если его нет
+          xcrun simctl boot "iPhone 15" || echo "⚠️ iPhone 15 не найден, пробуем другой..."
           
-          # Ждем, пока загрузится
-          xcrun simctl bootstatus "iPhone 15" -b || true
+          # Ждем загрузки с таймаутом (например, 2 минуты), чтобы избежать зависания
+          timeout 120s xcrun simctl bootstatus "iPhone 15" -b || true
           
           # Устанавливаем приложение
           APP_PATH="DerivedDataSim/Build/Products/Debug-iphonesimulator/Astrophotography.app"
@@ -100,7 +109,6 @@ jobs:
           
       - name: Launch App and Capture Logs
         run: |
-          # Запускаем приложение и собираем консольные логи
           echo "=== ЗАПУСК ПРИЛОЖЕНИЯ ===" > simulator.log
           (timeout 15s xcrun simctl launch --console-pty booted com.nikita.astrocameramod >> simulator.log 2>&1) || true
           echo "=== КОНЕЦ ЛОГОВ ===" >> simulator.log
@@ -108,7 +116,6 @@ jobs:
       - name: Collect Crash Reports
         if: always()
         run: |
-          # Собираем системные отчеты о падениях
           mkdir -p CrashLogs
           cp -R ~/Library/Logs/DiagnosticReports/* CrashLogs/ || true
 
