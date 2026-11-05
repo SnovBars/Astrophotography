@@ -12,7 +12,7 @@ jobs:
   # ЗАДАЧА 1: Сборка .ipa для установки на реальный iPhone
   # ---------------------------------------------------------
   build-ipa:
-    runs-on: macos-26  # Актуальный macOS 26 с Xcode 26
+    runs-on: macos-26
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -20,11 +20,27 @@ jobs:
       - name: Check Xcode version
         run: xcodebuild -version
 
+      - name: Cache Homebrew
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Caches/Homebrew
+            /opt/homebrew/Cellar
+          key: ${{ runner.os }}-brew-xcodegen-${{ hashFiles('**/project.yml') }}
+          restore-keys: ${{ runner.os }}-brew-
+
       - name: Install XcodeGen
         run: brew install xcodegen
 
       - name: Generate Xcode Project
         run: xcodegen generate
+
+      - name: Cache DerivedData (Release)
+        uses: actions/cache@v4
+        with:
+          path: DerivedData
+          key: ${{ runner.os }}-derived-data-release-${{ hashFiles('**/*.swift', '**/*.plist') }}
+          restore-keys: ${{ runner.os }}-derived-data-release-
 
       - name: Clean and build for iOS device (Release)
         run: |
@@ -63,7 +79,7 @@ jobs:
           if-no-files-found: error
 
   # ---------------------------------------------------------
-  # ЗАДАЧА 2: Запуск в симуляторе и сбор логов (Отладка)
+  # ЗАДАЧА 2: Ускоренный запуск в симуляторе (Отладка)
   # ---------------------------------------------------------
   debug-simulator:
     runs-on: macos-26
@@ -71,20 +87,33 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Cache Homebrew
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Caches/Homebrew
+            /opt/homebrew/Cellar
+          key: ${{ runner.os }}-brew-xcodegen-${{ hashFiles('**/project.yml') }}
+          restore-keys: ${{ runner.os }}-brew-
+
       - name: Install XcodeGen
         run: brew install xcodegen
 
       - name: Generate Xcode Project
         run: xcodegen generate
 
-      # --- ДИАГНОСТИКА (полезно для проверки) ---
-      - name: List available simulators and runtimes
+      # 🔥 УСКОРЕНИЕ: Запускаем симулятор ДО сборки, чтобы миграция шла в фоне
+      - name: Boot Simulator (Background)
         run: |
-          echo "=== Доступные устройства ==="
-          xcrun simctl list devices available
-          echo "=== Установленные runtime'ы ==="
-          xcrun simctl list runtimes
-      # -----------------------------------------
+          echo "Запускаем симулятор в фоне..."
+          xcrun simctl boot "iPhone 17" || true
+
+      - name: Cache DerivedData (Debug)
+        uses: actions/cache@v4
+        with:
+          path: DerivedDataSim
+          key: ${{ runner.os }}-derived-data-debug-${{ hashFiles('**/*.swift', '**/*.plist') }}
+          restore-keys: ${{ runner.os }}-derived-data-debug-
 
       - name: Build for Simulator (Debug)
         run: |
@@ -96,15 +125,12 @@ jobs:
             -destination 'platform=iOS Simulator,name=iPhone 17' \
             -derivedDataPath DerivedDataSim
 
-      - name: Boot Simulator and Install App
+      - name: Wait for Simulator and Install App
         run: |
-          # Загружаем актуальный симулятор iPhone 17
-          xcrun simctl boot "iPhone 17" || echo "⚠️ Не удалось загрузить iPhone 17, возможно, он уже загружен"
-          
-          # Ждем ПОЛНОЙ загрузки (миграция данных может занять время)
+          echo "Ожидаем полной загрузки симулятора..."
           xcrun simctl bootstatus "iPhone 17" -b || true
           
-          # Устанавливаем приложение
+          echo "Устанавливаем приложение..."
           APP_PATH="DerivedDataSim/Build/Products/Debug-iphonesimulator/Astrophotography.app"
           xcrun simctl install booted "$APP_PATH"
           
@@ -113,20 +139,17 @@ jobs:
           echo "=== ЗАПУСК ПРИЛОЖЕНИЯ ===" > simulator.log
           echo "=== СИСТЕМНЫЙ ЛОГ СИМУЛЯТОРА ===" > unified.log
           
-          # 1. Запускаем приложение в фоне (так как timeout в macOS нет)
-          xcrun simctl launch --console booted com.nikita.astrocameramod >> simulator.log 2>&1 &
+          # ИСПРАВЛЕНО: Используем ПРАВИЛЬНЫЙ Bundle ID (com.nikita.Astrophotography)
+          xcrun simctl launch --console booted com.nikita.Astrophotography >> simulator.log 2>&1 &
           APP_PID=$!
           
-          # 2. Ждем 15 секунд
+          # Ждем 15 секунд (можно уменьшить до 10, если хотите еще быстрее)
           sleep 15
-          
-          # 3. Принудительно завершаем, если еще работает
           kill $APP_PID 2>/dev/null || true
           
-          # 4. Собираем unified log за последние 60 секунд.
-          # Добавлен фильтр TCC (Transparency, Consent, and Control) — это логи разрешений!
+          # Собираем логи за последние 60 секунд, включая TCC (разрешения)
           xcrun simctl spawn booted log show --last 60s --style compact \
-            --predicate 'process == "Astrophotography" OR eventMessage CONTAINS "Astrophotography" OR eventMessage CONTAINS "com.nikita.astrocameramod" OR eventMessage CONTAINS "AVCapture" OR eventMessage CONTAINS "TCC" OR eventMessage CONTAINS "crash"' \
+            --predicate 'process == "Astrophotography" OR eventMessage CONTAINS "Astrophotography" OR eventMessage CONTAINS "com.nikita.Astrophotography" OR eventMessage CONTAINS "AVCapture" OR eventMessage CONTAINS "TCC" OR eventMessage CONTAINS "crash"' \
             >> unified.log 2>&1 || true
           
           echo "=== КОНЕЦ ЛОГОВ ===" >> simulator.log
