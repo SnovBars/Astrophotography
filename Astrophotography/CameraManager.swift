@@ -2,6 +2,7 @@ import AVFoundation
 import UIKit
 import Combine
 
+// MARK: - Errors
 enum CameraError: LocalizedError {
     case permissionDenied, permissionRestricted, noCamera
     case cannotConfigureSession(String), cannotAddInput, cannotAddOutput
@@ -90,6 +91,12 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
                 if self.session.canAddOutput(self.photoOutput) {
                     self.session.addOutput(self.photoOutput)
                     
+                    // Включаем поддержку RAW (DNG), если устройство её поддерживает
+                    if !self.photoOutput.availableRawPhotoPixelFormatTypes.isEmpty {
+                        // Достаточно того, что мы добавляем photoOutput в сессию.
+                        // Формат RAW будет выбран при создании AVCapturePhotoSettings в capturePhoto().
+                    }
+
                     if #available(iOS 17.0, *) {
                         if let maxDim = camera.activeFormat.supportedMaxPhotoDimensions.first {
                             self.photoOutput.maxPhotoDimensions = maxDim
@@ -191,16 +198,14 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
                     return
                 }
 
-                // 1. Принудительный и синхронный сброс зума
+                // 1. Безусловный и синхронный сброс зума
                 if let device = self.videoDeviceInput?.device {
                     do {
                         try device.lockForConfiguration()
-                        if device.videoZoomFactor != 1.0 {
-                            CrashLogger.shared.writeToFile(message: "Resetting zoom from \(device.videoZoomFactor) to 1.0")
-                            device.ramp(toVideoZoomFactor: 1.0, withRate: 100.0)
-                            Thread.sleep(forTimeInterval: 0.2)
-                        }
+                        // Принудительно ставим 1.0, даже если кажется, что уже 1.0
+                        device.videoZoomFactor = 1.0
                         device.unlockForConfiguration()
+                        CrashLogger.shared.writeToFile(message: "Zoom factor forcibly set to 1.0")
                     } catch {
                         CrashLogger.shared.writeToFile(message: "Error resetting zoom: \(error.localizedDescription)")
                     }
@@ -208,30 +213,36 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
                 
                 if let connection = self.photoOutput.connection(with: .video) {
                     connection.isEnabled = true
+                    CrashLogger.shared.writeToFile(message: "Video connection enabled.")
                 }
 
-                // 2. Безопасное создание настроек
+                // 2. Создание настроек RAW
                 var settings: AVCapturePhotoSettings
                 if let rawFormat = self.photoOutput.availableRawPhotoPixelFormatTypes.first(where: { AVCapturePhotoOutput.isBayerRAWPixelFormat($0) }) {
                     settings = AVCapturePhotoSettings(rawPixelFormatType: rawFormat)
-                    CrashLogger.shared.writeToFile(message: "Using RAW format: \(rawFormat)")
+                    CrashLogger.shared.writeToFile(message: "Created RAW settings with format: \(rawFormat)")
                 } else {
                     settings = AVCapturePhotoSettings()
-                    CrashLogger.shared.writeToFile(message: "RAW format not available. Using JPEG.")
+                    CrashLogger.shared.writeToFile(message: "RAW not available. Using JPEG.")
                 }
 
-                settings.photoQualityPrioritization = .quality
+                // ВАЖНО: Для RAW не ставим .quality, это может вызвать конфликт пайплайна
+                if settings.rawPhotoPixelFormatType == 0 {
+                    settings.photoQualityPrioritization = .quality
+                }
                 
-                // 3. Устанавливаем maxPhotoDimensions ТОЛЬКО для не-RAW снимков
+                // 3. НЕ трогаем maxPhotoDimensions для RAW
                 if #available(iOS 17.0, *), settings.rawPhotoPixelFormatType == 0 {
                     let maxDim = self.photoOutput.maxPhotoDimensions
                     if maxDim.width > 0 && maxDim.height > 0 {
                         settings.maxPhotoDimensions = maxDim
-                        CrashLogger.shared.writeToFile(message: "Set max dimensions: \(maxDim.width)x\(maxDim.height)")
+                        CrashLogger.shared.writeToFile(message: "Set max dimensions for JPEG.")
                     }
                 }
 
-                CrashLogger.shared.writeToFile(message: "Calling photoOutput.capturePhoto")
+                // 4. Логируем прямо перед вызовом
+                CrashLogger.shared.writeToFile(message: "About to call photoOutput.capturePhoto")
+                
                 self.photoOutput.capturePhoto(with: settings, delegate: self)
             }
         }
