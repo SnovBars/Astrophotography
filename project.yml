@@ -17,13 +17,3 @@ targets:
         NSPhotoLibraryAddUsageDescription: "Нам нужно разрешение, чтобы сохранять ваши астрономические снимки в галерею."
         UIFileSharingEnabled: true
         LSSupportsOpeningDocumentsInPlace: true
-        LSSupportsOpeningItemsInPlace: true
-        LSSupportsOpeningItemsAtURLs: true
-        LSSupportsOpeningItemsInFileExtension: "jpg,jpeg,png,gif,bmp"
-        LSSupportsOpeningItemsInDirectory: true
-        LSSupportsOpeningItemsInDirectoryAtURL: true
-        LSSupportsOpeningItemsInDirectoryAtURLRecursively: true
-        LSSupportsOpeningItemsInDirectoryAtURLRecursivelyWithFileExtension: "jpg,jpeg,png,gif,bmp"
-        LSSupportsOpeningItemsInDirectoryAtURLRecursivelyWithFileExtensionIncludingSubdirectories: "jpg,jpeg,png,gif,bmp"
-        LSSupportsOpeningItemsInDirectoryAtURLRecursivelyWithFileExtensionIncludingSubdirectoriesAndFiles: "jpg,jpeg,png,gif,bmp"
-        LSSupportsOpeningItemsInDirectoryAtURLRecursivelyWithFileExtensionIncludingSubdirectoriesAndFilesIncludingNonImages: "jpg,jpeg,png,gif,bmp"
