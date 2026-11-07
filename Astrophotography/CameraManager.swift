@@ -98,10 +98,9 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
                 if self.session.canAddOutput(self.photoOutput) {
                     self.session.addOutput(self.photoOutput)
 
-                    // ✅ ИСПРАВЛЕНО: Проверяем, что массив доступных RAW-форматов не пуст
-                    if !self.photoOutput.availableRawPhotoPixelFormatTypes.isEmpty {
-                        self.photoOutput.isRawCaptureEnabled = true
-                    }
+                    // ❌ УБРАНО: self.photoOutput.isRawCaptureEnabled = true
+                    // ✅ Достаточно того, что мы добавляем photoOutput в сессию.
+                    // Формат RAW будет выбран при создании AVCapturePhotoSettings в capturePhoto().
 
                     if #available(iOS 17.0, *) {
                         if let maxDim = camera.activeFormat.supportedMaxPhotoDimensions.first {
