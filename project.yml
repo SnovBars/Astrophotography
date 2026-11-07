@@ -7,6 +7,8 @@ targets:
     platform: iOS
     deploymentTarget: "17.0"
     sources: [Astrophotography]
+    settings:
+      SWIFT_OBJC_BRIDGING_HEADER: Astrophotography/Astrophotography-Bridging-Header.h
     info:
       path: Astrophotography/Info.plist
       properties:

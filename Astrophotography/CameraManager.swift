@@ -2,7 +2,6 @@ import AVFoundation
 import UIKit
 import Combine
 
-// MARK: - Errors
 enum CameraError: LocalizedError {
     case permissionDenied, permissionRestricted, noCamera
     case cannotConfigureSession(String), cannotAddInput, cannotAddOutput
@@ -93,7 +92,6 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
                     
                     if #available(iOS 17.0, *) {
                         if let maxDim = camera.activeFormat.supportedMaxPhotoDimensions.first {
-                            // Устанавливаем максимальное разрешение для фото-выхода
                             self.photoOutput.maxPhotoDimensions = maxDim
                         }
                     }
@@ -170,13 +168,16 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
 
     // MARK: - Capture
     func capturePhoto() async throws -> Data {
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Data, Error>) in
+        CrashLogger.shared.writeToFile(message: "Capture started.")
+        
+        return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Data, Error>) in
             continuationLock.lock()
             let alreadyCapturing = (photoContinuation != nil)
             if !alreadyCapturing { photoContinuation = continuation }
             continuationLock.unlock()
 
             if alreadyCapturing {
+                CrashLogger.shared.writeToFile(message: "Error: capture already in progress.")
                 continuation.resume(throwing: CameraError.captureFailed("Съёмка уже выполняется"))
                 return
             }
@@ -184,24 +185,24 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
             sessionQueue.async { [weak self] in
                 guard let self = self else { return }
                 
-                // Защита: если сессия не запущена, не пытаемся снимать
                 guard self.isSessionConfigured, self.session.isRunning else {
+                    CrashLogger.shared.writeToFile(message: "Error: session not configured or not running.")
                     self.finishCapture(with: .failure(CameraError.sessionNotConfigured))
                     return
                 }
 
-                // 1. Надежная фиксация зума на 1.0 с задержкой
+                // 1. Принудительный и синхронный сброс зума
                 if let device = self.videoDeviceInput?.device {
                     do {
                         try device.lockForConfiguration()
                         if device.videoZoomFactor != 1.0 {
-                            device.videoZoomFactor = 1.0
-                            // Даем камере время применить зум перед съемкой
-                            Thread.sleep(forTimeInterval: 0.2) 
+                            CrashLogger.shared.writeToFile(message: "Resetting zoom from \(device.videoZoomFactor) to 1.0")
+                            device.ramp(toVideoZoomFactor: 1.0, withRate: 100.0)
+                            Thread.sleep(forTimeInterval: 0.2)
                         }
                         device.unlockForConfiguration()
                     } catch {
-                        print("Ошибка фиксации зума: \(error)")
+                        CrashLogger.shared.writeToFile(message: "Error resetting zoom: \(error.localizedDescription)")
                     }
                 }
                 
@@ -209,31 +210,28 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
                     connection.isEnabled = true
                 }
 
-                // 2. Создаем настройки
+                // 2. Безопасное создание настроек
                 var settings: AVCapturePhotoSettings
-                
-                // Ищем Bayer RAW формат
                 if let rawFormat = self.photoOutput.availableRawPhotoPixelFormatTypes.first(where: { AVCapturePhotoOutput.isBayerRAWPixelFormat($0) }) {
                     settings = AVCapturePhotoSettings(rawPixelFormatType: rawFormat)
+                    CrashLogger.shared.writeToFile(message: "Using RAW format: \(rawFormat)")
                 } else {
-                    // Если RAW не поддерживается, снимаем обычный JPEG
                     settings = AVCapturePhotoSettings()
+                    CrashLogger.shared.writeToFile(message: "RAW format not available. Using JPEG.")
                 }
 
                 settings.photoQualityPrioritization = .quality
                 
-                // ❌ УБРАНО: Мы НЕ применяем settings.maxPhotoDimensions для RAW.
-                // Разрешение для DNG камера выберет сама. Если насильно задать JPEG-разрешение,
-                // это вызовет краш NSInvalidArgumentException.
-                
-                // Вместо этого, безопасно ставим максимальное разрешение ТОЛЬКО для обычных снимков (JPEG)
+                // 3. Устанавливаем maxPhotoDimensions ТОЛЬКО для не-RAW снимков
                 if #available(iOS 17.0, *), settings.rawPhotoPixelFormatType == 0 {
                     let maxDim = self.photoOutput.maxPhotoDimensions
                     if maxDim.width > 0 && maxDim.height > 0 {
                         settings.maxPhotoDimensions = maxDim
+                        CrashLogger.shared.writeToFile(message: "Set max dimensions: \(maxDim.width)x\(maxDim.height)")
                     }
                 }
 
+                CrashLogger.shared.writeToFile(message: "Calling photoOutput.capturePhoto")
                 self.photoOutput.capturePhoto(with: settings, delegate: self)
             }
         }
@@ -253,13 +251,16 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
 extension CameraManager: AVCapturePhotoCaptureDelegate {
     nonisolated func photoOutput(_ output: AVCapturePhotoOutput, didFinishProcessingPhoto photo: AVCapturePhoto, error: Error?) {
         if let error = error {
+            CrashLogger.shared.writeToFile(message: "Delegate error: \(error.localizedDescription)")
             finishCapture(with: .failure(CameraError.captureFailed(error.localizedDescription)))
             return
         }
         guard let data = photo.fileDataRepresentation() else {
+            CrashLogger.shared.writeToFile(message: "Failed to get file data representation.")
             finishCapture(with: .failure(CameraError.captureFailed("Не удалось сформировать файл")))
             return
         }
+        CrashLogger.shared.writeToFile(message: "Successfully captured photo. Size: \(data.count) bytes.")
         finishCapture(with: .success(data))
     }
 }
