@@ -36,7 +36,7 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
     private let continuationLock = NSLock()
     private var photoContinuation: CheckedContinuation<Data, Error>?
 
-    // MARK: - Permission (без изменений)
+    // MARK: - Permission
     static func currentCameraPermission() -> AVAuthorizationStatus {
         AVCaptureDevice.authorizationStatus(for: .video)
     }
@@ -50,7 +50,7 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
         }
     }
 
-    // MARK: - Configure (без изменений)
+    // MARK: - Configure
     func configureSession() async throws {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             sessionQueue.async { [weak self] in
@@ -91,14 +91,9 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
                 if self.session.canAddOutput(self.photoOutput) {
                     self.session.addOutput(self.photoOutput)
                     
-                    // Включаем поддержку RAW (DNG), если устройство её поддерживает
-                    if !self.photoOutput.availableRawPhotoPixelFormatTypes.isEmpty {
-                        // Достаточно того, что мы добавляем photoOutput в сессию.
-                        // Формат RAW будет выбран при создании AVCapturePhotoSettings в capturePhoto().
-                    }
-
                     if #available(iOS 17.0, *) {
                         if let maxDim = camera.activeFormat.supportedMaxPhotoDimensions.first {
+                            // Устанавливаем максимальное разрешение для фото-выхода
                             self.photoOutput.maxPhotoDimensions = maxDim
                         }
                     }
@@ -121,7 +116,7 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
         }
     }
 
-    // MARK: - Start / Stop (без изменений)
+    // MARK: - Start / Stop
     func startSession() async {
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             sessionQueue.async { [weak self] in
@@ -153,7 +148,7 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
         }
     }
 
-    // MARK: - Exposure (без изменений)
+    // MARK: - Exposure
     func setManualExposure(iso: Float, shutterSpeed: CMTime) {
         sessionQueue.async { [weak self] in
             guard let self = self, let device = self.videoDeviceInput?.device else { return }
@@ -173,7 +168,7 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
         }
     }
 
-    // MARK: - Capture (ИСПРАВЛЕННАЯ ВЕРСИЯ)
+    // MARK: - Capture
     func capturePhoto() async throws -> Data {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Data, Error>) in
             continuationLock.lock()
@@ -188,19 +183,25 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
 
             sessionQueue.async { [weak self] in
                 guard let self = self else { return }
-                guard self.isSessionConfigured else {
+                
+                // Защита: если сессия не запущена, не пытаемся снимать
+                guard self.isSessionConfigured, self.session.isRunning else {
                     self.finishCapture(with: .failure(CameraError.sessionNotConfigured))
                     return
                 }
 
-                // ✅ ИСПРАВЛЕНИЕ 1: Принудительно сбрасываем зум на 1.0
+                // 1. Надежная фиксация зума на 1.0 с задержкой
                 if let device = self.videoDeviceInput?.device {
                     do {
                         try device.lockForConfiguration()
-                        device.videoZoomFactor = 1.0
+                        if device.videoZoomFactor != 1.0 {
+                            device.videoZoomFactor = 1.0
+                            // Даем камере время применить зум перед съемкой
+                            Thread.sleep(forTimeInterval: 0.2) 
+                        }
                         device.unlockForConfiguration()
                     } catch {
-                        print("Ошибка сброса зума: \(error)")
+                        print("Ошибка фиксации зума: \(error)")
                     }
                 }
                 
@@ -208,17 +209,29 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
                     connection.isEnabled = true
                 }
 
-                // ✅ ИСПРАВЛЕНИЕ 2: Более надёжный выбор RAW формата (Bayer RAW)
+                // 2. Создаем настройки
                 var settings: AVCapturePhotoSettings
+                
+                // Ищем Bayer RAW формат
                 if let rawFormat = self.photoOutput.availableRawPhotoPixelFormatTypes.first(where: { AVCapturePhotoOutput.isBayerRAWPixelFormat($0) }) {
                     settings = AVCapturePhotoSettings(rawPixelFormatType: rawFormat)
                 } else {
+                    // Если RAW не поддерживается, снимаем обычный JPEG
                     settings = AVCapturePhotoSettings()
                 }
 
                 settings.photoQualityPrioritization = .quality
-                if #available(iOS 17.0, *) {
-                    settings.maxPhotoDimensions = self.photoOutput.maxPhotoDimensions
+                
+                // ❌ УБРАНО: Мы НЕ применяем settings.maxPhotoDimensions для RAW.
+                // Разрешение для DNG камера выберет сама. Если насильно задать JPEG-разрешение,
+                // это вызовет краш NSInvalidArgumentException.
+                
+                // Вместо этого, безопасно ставим максимальное разрешение ТОЛЬКО для обычных снимков (JPEG)
+                if #available(iOS 17.0, *), settings.rawPhotoPixelFormatType == 0 {
+                    let maxDim = self.photoOutput.maxPhotoDimensions
+                    if maxDim.width > 0 && maxDim.height > 0 {
+                        settings.maxPhotoDimensions = maxDim
+                    }
                 }
 
                 self.photoOutput.capturePhoto(with: settings, delegate: self)
