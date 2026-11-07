@@ -25,7 +25,9 @@ struct CameraView: View {
             }
         }
         .preferredColorScheme(.dark)
-        .onAppear { motionManager.startUpdates() }
+        .onAppear {
+            motionManager.startUpdates()
+        }
         .onDisappear {
             motionManager.stopUpdates()
             viewModel.stopSession()
@@ -34,6 +36,7 @@ struct CameraView: View {
         .onChange(of: viewModel.shutterSpeedSeconds) { _, _ in viewModel.updateExposure() }
     }
 
+    // MARK: - Overlay
     private var gridAndHorizonOverlay: some View {
         GeometryReader { geo in
             ZStack {
@@ -64,6 +67,7 @@ struct CameraView: View {
         }
     }
 
+    // MARK: - Control Panel
     private var controlPanel: some View {
         VStack(spacing: 12) {
             HStack {
@@ -94,6 +98,15 @@ struct CameraView: View {
                 step: 1,
                 formatter: { String(format: "%.0f", $0) }
             )
+            
+            // ✅ Поле для ввода названия сессии
+            TextField("Название сессии (или оставь пустым для даты)", text: $viewModel.sessionName)
+                .textFieldStyle(.roundedBorder)
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.never)
+                .padding(.horizontal)
+                .disabled(viewModel.isBursting)
+                .opacity(viewModel.isBursting ? 0.5 : 1.0)
             
             if viewModel.isBursting {
                 Text("Съемка: \(viewModel.burstProgress) / \(Int(viewModel.burstCount))")
@@ -133,6 +146,7 @@ struct CameraView: View {
     }
 }
 
+// MARK: - Camera Preview
 struct CameraPreviewView: UIViewRepresentable {
     let session: AVCaptureSession
 
