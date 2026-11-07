@@ -77,8 +77,8 @@ jobs:
 
       - name: Boot Simulator (Background)
         run: |
-          echo "Запускаем симулятор iPhone 16 Pro в фоне..."
-          xcrun simctl boot "iPhone 16 Pro" || true
+          echo "Запускаем симулятор iPhone 17 в фоне..."
+          xcrun simctl boot "iPhone 17" || true
 
       - name: Build for Simulator (Debug)
         run: |
@@ -87,14 +87,14 @@ jobs:
             -scheme Astrophotography \
             -configuration Debug \
             -sdk iphonesimulator \
-            -destination 'platform=iOS Simulator,name=iPhone 16 Pro' \
+            -destination 'platform=iOS Simulator,name=iPhone 17,OS=latest' \
             SWIFT_STRICT_CONCURRENCY=minimal \
             -derivedDataPath DerivedDataSim
 
       - name: Wait for Simulator and Install App
         run: |
           echo "Ожидаем полной загрузки симулятора..."
-          xcrun simctl bootstatus "iPhone 16 Pro" -b || true
+          xcrun simctl bootstatus "iPhone 17" -b || true
           
           echo "Устанавливаем приложение..."
           APP_PATH="DerivedDataSim/Build/Products/Debug-iphonesimulator/Astrophotography.app"
