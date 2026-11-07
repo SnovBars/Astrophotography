@@ -4,15 +4,9 @@ import Combine
 
 // MARK: - Errors
 enum CameraError: LocalizedError {
-    case permissionDenied
-    case permissionRestricted
-    case noCamera
-    case cannotConfigureSession(String)
-    case cannotAddInput
-    case cannotAddOutput
-    case sessionNotConfigured
-    case captureFailed(String)
-    case saveFailed(String)
+    case permissionDenied, permissionRestricted, noCamera
+    case cannotConfigureSession(String), cannotAddInput, cannotAddOutput
+    case sessionNotConfigured, captureFailed(String), saveFailed(String)
 
     var errorDescription: String? {
         switch self {
@@ -42,7 +36,7 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
     private let continuationLock = NSLock()
     private var photoContinuation: CheckedContinuation<Data, Error>?
 
-    // MARK: - Permission
+    // MARK: - Permission (без изменений)
     static func currentCameraPermission() -> AVAuthorizationStatus {
         AVCaptureDevice.authorizationStatus(for: .video)
     }
@@ -56,7 +50,7 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
         }
     }
 
-    // MARK: - Configure
+    // MARK: - Configure (без изменений)
     func configureSession() async throws {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             sessionQueue.async { [weak self] in
@@ -68,7 +62,6 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
                 self.session.beginConfiguration()
                 self.session.sessionPreset = .photo
 
-                // Очистка предыдущей конфигурации
                 for input in self.session.inputs { self.session.removeInput(input) }
                 for output in self.session.outputs { self.session.removeOutput(output) }
                 self.videoDeviceInput = nil
@@ -97,10 +90,12 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
 
                 if self.session.canAddOutput(self.photoOutput) {
                     self.session.addOutput(self.photoOutput)
-
-                    // ❌ УБРАНО: self.photoOutput.isRawCaptureEnabled = true
-                    // ✅ Достаточно того, что мы добавляем photoOutput в сессию.
-                    // Формат RAW будет выбран при создании AVCapturePhotoSettings в capturePhoto().
+                    
+                    // Включаем поддержку RAW (DNG), если устройство её поддерживает
+                    if !self.photoOutput.availableRawPhotoPixelFormatTypes.isEmpty {
+                        // Достаточно того, что мы добавляем photoOutput в сессию.
+                        // Формат RAW будет выбран при создании AVCapturePhotoSettings в capturePhoto().
+                    }
 
                     if #available(iOS 17.0, *) {
                         if let maxDim = camera.activeFormat.supportedMaxPhotoDimensions.first {
@@ -126,7 +121,7 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
         }
     }
 
-    // MARK: - Start / Stop
+    // MARK: - Start / Stop (без изменений)
     func startSession() async {
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             sessionQueue.async { [weak self] in
@@ -158,7 +153,7 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
         }
     }
 
-    // MARK: - Exposure
+    // MARK: - Exposure (без изменений)
     func setManualExposure(iso: Float, shutterSpeed: CMTime) {
         sessionQueue.async { [weak self] in
             guard let self = self, let device = self.videoDeviceInput?.device else { return }
@@ -178,7 +173,7 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
         }
     }
 
-    // MARK: - Capture
+    // MARK: - Capture (ИСПРАВЛЕННАЯ ВЕРСИЯ)
     func capturePhoto() async throws -> Data {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Data, Error>) in
             continuationLock.lock()
@@ -198,12 +193,24 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
                     return
                 }
 
+                // ✅ ИСПРАВЛЕНИЕ 1: Принудительно сбрасываем зум на 1.0
+                if let device = self.videoDeviceInput?.device {
+                    do {
+                        try device.lockForConfiguration()
+                        device.videoZoomFactor = 1.0
+                        device.unlockForConfiguration()
+                    } catch {
+                        print("Ошибка сброса зума: \(error)")
+                    }
+                }
+                
                 if let connection = self.photoOutput.connection(with: .video) {
                     connection.isEnabled = true
                 }
 
-                let settings: AVCapturePhotoSettings
-                if let rawFormat = self.photoOutput.availableRawPhotoPixelFormatTypes.first {
+                // ✅ ИСПРАВЛЕНИЕ 2: Более надёжный выбор RAW формата (Bayer RAW)
+                var settings: AVCapturePhotoSettings
+                if let rawFormat = self.photoOutput.availableRawPhotoPixelFormatTypes.first(where: { AVCapturePhotoOutput.isBayerRAWPixelFormat($0) }) {
                     settings = AVCapturePhotoSettings(rawPixelFormatType: rawFormat)
                 } else {
                     settings = AVCapturePhotoSettings()
