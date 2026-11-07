@@ -10,9 +10,13 @@ final class AstrophotographyViewModel: ObservableObject {
     @Published var shutterSpeedSeconds: Double = 0.1
     @Published var focus: Float = 0.5
     @Published var whiteBalanceKelvin: Float = 5000
-    @Published var isCapturing: Bool = false
     @Published var previewLayer: AVCaptureVideoPreviewLayer?
     @Published var isSessionRunning: Bool = false
+    
+    // Для серийной съемки
+    @Published var burstCount: Double = 10
+    @Published var isBursting: Bool = false
+    @Published var burstProgress: Int = 0
 
     // MARK: - Dependencies
     private(set) var cameraManager = CameraManager()
@@ -46,6 +50,11 @@ final class AstrophotographyViewModel: ObservableObject {
             throw CameraError.permissionDenied
         }
 
+        let photoStatus = PHPhotoLibrary.authorizationStatus(for: .addOnly)
+        if photoStatus == .notDetermined {
+            _ = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
+        }
+
         if cameraManager.isSessionConfigured {
             await cameraManager.startSession()
         } else {
@@ -64,37 +73,41 @@ final class AstrophotographyViewModel: ObservableObject {
         cameraManager.setManualExposure(iso: iso, shutterSpeed: shutterSpeedCMTime)
     }
 
-    // MARK: - Capture
-    func capturePhoto() async throws {
-        guard !isCapturing else { return }
-        isCapturing = true
-        defer { isCapturing = false }
-
-        let image = try await cameraManager.capturePhoto()
-        try await saveToPhotoLibrary(image)
+    // MARK: - Burst Capture (Серийная съемка в RAW)
+    func startBurstCapture() async {
+        guard !isBursting else { return }
+        isBursting = true
+        burstProgress = 0
+        
+        let totalShots = Int(burstCount)
+        
+        for i in 1...totalShots {
+            do {
+                // 1. Делаем снимок (получаем сырые данные DNG)
+                let rawData = try await cameraManager.capturePhoto()
+                
+                // 2. Сохраняем в папку Documents
+                try saveRawToDocuments(rawData, index: i)
+                
+                burstProgress = i
+                
+                // 3. Небольшая пауза, чтобы сенсор "остыл" и не завис
+                try await Task.sleep(nanoseconds: 300_000_000)
+                
+            } catch {
+                print("Ошибка при серии: \(error)")
+                break
+            }
+        }
+        
+        isBursting = false
     }
 
-    // MARK: - Save
-    private func saveToPhotoLibrary(_ image: UIImage) async throws {
-        let currentStatus = PHPhotoLibrary.authorizationStatus(for: .addOnly)
-        let granted: Bool
-
-        switch currentStatus {
-        case .authorized, .limited:
-            granted = true
-        case .notDetermined:
-            let newStatus = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
-            granted = (newStatus == .authorized || newStatus == .limited)
-        default:
-            granted = false
-        }
-
-        guard granted else {
-            throw CameraError.saveFailed("Нет доступа к Фото. Разрешите сохранение снимков в Настройках iPhone.")
-        }
-
-        try await PHPhotoLibrary.shared().performChanges {
-            PHAssetChangeRequest.creationRequestForAsset(from: image)
-        }
+    private func saveRawToDocuments(_ data: Data, index: Int) throws {
+        let documentsURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let fileName = String(format: "astro_%03d.dng", index)
+        let fileURL = documentsURL.appendingPathComponent(fileName)
+        try data.write(to: fileURL)
+        print("Сохранено: \(fileName)")
     }
 }

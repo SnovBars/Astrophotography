@@ -12,7 +12,7 @@ jobs:
   # ЗАДАЧА 1: Сборка .ipa для установки на реальный iPhone
   # ---------------------------------------------------------
   build-ipa:
-    runs-on: macos-15  # Стабильный macOS 15 с Xcode 16
+    runs-on: macos-26  # Xcode 26
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -64,7 +64,7 @@ jobs:
   # ЗАДАЧА 2: Запуск в симуляторе и сбор логов (Отладка)
   # ---------------------------------------------------------
   debug-simulator:
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -75,11 +75,10 @@ jobs:
       - name: Generate Xcode Project
         run: xcodegen generate
 
-      # Запускаем симулятор в фоне, чтобы он прогрелся, пока идет сборка
       - name: Boot Simulator (Background)
         run: |
-          echo "Запускаем симулятор iPhone 16 в фоне..."
-          xcrun simctl boot "iPhone 16" || true
+          echo "Запускаем симулятор iPhone 16 Pro в фоне..."
+          xcrun simctl boot "iPhone 16 Pro" || true
 
       - name: Build for Simulator (Debug)
         run: |
@@ -88,14 +87,14 @@ jobs:
             -scheme Astrophotography \
             -configuration Debug \
             -sdk iphonesimulator \
-            -destination 'platform=iOS Simulator,name=iPhone 16' \
+            -destination 'platform=iOS Simulator,name=iPhone 16 Pro' \
             SWIFT_STRICT_CONCURRENCY=minimal \
             -derivedDataPath DerivedDataSim
 
       - name: Wait for Simulator and Install App
         run: |
           echo "Ожидаем полной загрузки симулятора..."
-          xcrun simctl bootstatus "iPhone 16" -b || true
+          xcrun simctl bootstatus "iPhone 16 Pro" -b || true
           
           echo "Устанавливаем приложение..."
           APP_PATH="DerivedDataSim/Build/Products/Debug-iphonesimulator/Astrophotography.app"
@@ -106,15 +105,12 @@ jobs:
           echo "=== ЗАПУСК ПРИЛОЖЕНИЯ ===" > simulator.log
           echo "=== СИСТЕМНЫЙ ЛОГ СИМУЛЯТОРА ===" > unified.log
           
-          # Используем правильный Bundle ID
           xcrun simctl launch --console booted com.nikita.Astrophotography >> simulator.log 2>&1 &
           APP_PID=$!
           
-          # Ждем 15 секунд
           sleep 15
           kill $APP_PID 2>/dev/null || true
           
-          # Собираем логи за последние 60 секунд, включая разрешения (TCC) и камеру
           xcrun simctl spawn booted log show --last 60s --style compact \
             --predicate 'process == "Astrophotography" OR eventMessage CONTAINS "Astrophotography" OR eventMessage CONTAINS "com.nikita.Astrophotography" OR eventMessage CONTAINS "AVCapture" OR eventMessage CONTAINS "TCC" OR eventMessage CONTAINS "crash"' \
             >> unified.log 2>&1 || true

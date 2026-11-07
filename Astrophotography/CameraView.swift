@@ -81,6 +81,8 @@ struct CameraView: View {
                     step: 1,
                     formatter: { String(format: "%.0f", $0) }
                 )
+                
+                // Выдержка до 1.0 сек (максимум для сторонних приложений)
                 controlSlider(
                     title: "Shutter",
                     value: $viewModel.shutterSpeedSeconds,
@@ -89,37 +91,36 @@ struct CameraView: View {
                     formatter: { String(format: "%.3f s", $0) }
                 )
             }
+            
+            // Ползунок количества кадров для серии
+            controlSlider(
+                title: "Кадров (RAW)",
+                value: $viewModel.burstCount,
+                range: 1...100,
+                step: 1,
+                formatter: { String(format: "%.0f", $0) }
+            )
+            
+            if viewModel.isBursting {
+                Text("Съемка: \(viewModel.burstProgress) / \(Int(viewModel.burstCount))")
+                    .foregroundColor(.green)
+                    .font(.caption)
+                    .bold()
+            }
 
             Button {
-                capture()
+                Task { await viewModel.startBurstCapture() }
             } label: {
-                Group {
-                    if viewModel.isCapturing {
-                        ProgressView().tint(.black)
-                    } else {
-                        Text("Capture")
-                    }
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 8)
+                Text(viewModel.isBursting ? "Идет съемка..." : "Старт серии (RAW)")
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
             }
             .buttonStyle(.borderedProminent)
-            .tint(.white)
-            .disabled(viewModel.isCapturing)
+            .tint(viewModel.isBursting ? .gray : .white)
+            .disabled(viewModel.isBursting)
         }
         .buttonStyle(.bordered)
         .tint(.white)
-    }
-
-    private func capture() {
-        Task {
-            do {
-                try await viewModel.capturePhoto()
-            } catch {
-                let message = (error as? CameraError)?.errorDescription ?? error.localizedDescription
-                appState = .error(message)
-            }
-        }
     }
 
     // Только Double — без generic, без сюрпризов

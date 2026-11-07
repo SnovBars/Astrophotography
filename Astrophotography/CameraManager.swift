@@ -40,7 +40,7 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
     private let sessionQueue = DispatchQueue(label: "com.nikita.camera.sessionQueue")
 
     private let continuationLock = NSLock()
-    private var photoContinuation: CheckedContinuation<UIImage, Error>?
+    private var photoContinuation: CheckedContinuation<Data, Error>? // Теперь возвращаем Data
 
     static func currentCameraPermission() -> AVAuthorizationStatus {
         AVCaptureDevice.authorizationStatus(for: .video)
@@ -94,6 +94,12 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
 
                 if self.session.canAddOutput(self.photoOutput) {
                     self.session.addOutput(self.photoOutput)
+                    
+                    // Включаем поддержку RAW (DNG)
+                    if self.photoOutput.availablePhotoPixelFormatTypes.contains(kCVPixelFormatType_RAW14) {
+                        self.photoOutput.isRawCaptureEnabled = true
+                    }
+                    
                     if #available(iOS 17.0, *) {
                         if let maxDim = camera.activeFormat.supportedMaxPhotoDimensions.first {
                             self.photoOutput.maxPhotoDimensions = maxDim
@@ -168,8 +174,8 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
         }
     }
 
-    func capturePhoto() async throws -> UIImage {
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<UIImage, Error>) in
+    func capturePhoto() async throws -> Data {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Data, Error>) in
             continuationLock.lock()
             let alreadyCapturing = (photoContinuation != nil)
             if !alreadyCapturing { photoContinuation = continuation }
@@ -186,17 +192,30 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
                     self.finishCapture(with: .failure(CameraError.sessionNotConfigured))
                     return
                 }
-                let settings = AVCapturePhotoSettings()
+                
+                if let connection = self.photoOutput.connection(with: .video) {
+                    connection.isEnabled = true
+                }
+                
+                // Настраиваем захват в RAW
+                let settings: AVCapturePhotoSettings
+                if let rawFormat = self.photoOutput.availableRawPhotoPixelFormatTypes.first {
+                    settings = AVCapturePhotoSettings(rawPixelFormatType: rawFormat)
+                } else {
+                    settings = AVCapturePhotoSettings()
+                }
+                
                 settings.photoQualityPrioritization = .quality
                 if #available(iOS 17.0, *) {
                     settings.maxPhotoDimensions = self.photoOutput.maxPhotoDimensions
                 }
+                
                 self.photoOutput.capturePhoto(with: settings, delegate: self)
             }
         }
     }
 
-    private func finishCapture(with result: Result<UIImage, Error>) {
+    private func finishCapture(with result: Result<Data, Error>) {
         continuationLock.lock()
         let continuation = photoContinuation
         photoContinuation = nil
@@ -212,10 +231,10 @@ extension CameraManager: AVCapturePhotoCaptureDelegate {
             finishCapture(with: .failure(CameraError.captureFailed(error.localizedDescription)))
             return
         }
-        guard let data = photo.fileDataRepresentation(), let image = UIImage(data: data) else {
-            finishCapture(with: .failure(CameraError.captureFailed("Не удалось сформировать изображение")))
+        guard let data = photo.fileDataRepresentation() else {
+            finishCapture(with: .failure(CameraError.captureFailed("Не удалось сформировать файл")))
             return
         }
-        finishCapture(with: .success(image))
+        finishCapture(with: .success(data))
     }
 }

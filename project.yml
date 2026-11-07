@@ -15,3 +15,5 @@ targets:
           - UIInterfaceOrientationPortrait
         NSCameraUsageDescription: "Нам нужна камера для съёмки звёзд и ночного неба."
         NSPhotoLibraryAddUsageDescription: "Нам нужно разрешение, чтобы сохранять ваши астрономические снимки в галерею."
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
