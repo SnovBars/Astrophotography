@@ -2,10 +2,17 @@ import AVFoundation
 import UIKit
 import Combine
 
+// MARK: - Errors
 enum CameraError: LocalizedError {
-    case permissionDenied, permissionRestricted, noCamera
-    case cannotConfigureSession(String), cannotAddInput, cannotAddOutput
-    case sessionNotConfigured, captureFailed(String), saveFailed(String)
+    case permissionDenied
+    case permissionRestricted
+    case noCamera
+    case cannotConfigureSession(String)
+    case cannotAddInput
+    case cannotAddOutput
+    case sessionNotConfigured
+    case captureFailed(String)
+    case saveFailed(String)
 
     var errorDescription: String? {
         switch self {
@@ -35,6 +42,7 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
     private let continuationLock = NSLock()
     private var photoContinuation: CheckedContinuation<Data, Error>?
 
+    // MARK: - Permission
     static func currentCameraPermission() -> AVAuthorizationStatus {
         AVCaptureDevice.authorizationStatus(for: .video)
     }
@@ -48,6 +56,7 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
         }
     }
 
+    // MARK: - Configure
     func configureSession() async throws {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             sessionQueue.async { [weak self] in
@@ -59,6 +68,7 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
                 self.session.beginConfiguration()
                 self.session.sessionPreset = .photo
 
+                // Очистка предыдущей конфигурации
                 for input in self.session.inputs { self.session.removeInput(input) }
                 for output in self.session.outputs { self.session.removeOutput(output) }
                 self.videoDeviceInput = nil
@@ -87,9 +97,12 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
 
                 if self.session.canAddOutput(self.photoOutput) {
                     self.session.addOutput(self.photoOutput)
-                    if self.photoOutput.availablePhotoPixelFormatTypes.contains(kCVPixelFormatType_RAW14) {
+
+                    // ✅ ИСПРАВЛЕНО: Проверяем, что массив доступных RAW-форматов не пуст
+                    if !self.photoOutput.availableRawPhotoPixelFormatTypes.isEmpty {
                         self.photoOutput.isRawCaptureEnabled = true
                     }
+
                     if #available(iOS 17.0, *) {
                         if let maxDim = camera.activeFormat.supportedMaxPhotoDimensions.first {
                             self.photoOutput.maxPhotoDimensions = maxDim
@@ -114,6 +127,7 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
         }
     }
 
+    // MARK: - Start / Stop
     func startSession() async {
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             sessionQueue.async { [weak self] in
@@ -121,7 +135,9 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
                     DispatchQueue.main.async { continuation.resume() }
                     return
                 }
-                if !self.session.isRunning { self.session.startRunning() }
+                if !self.session.isRunning {
+                    self.session.startRunning()
+                }
                 let running = self.session.isRunning
                 DispatchQueue.main.async {
                     self.isSessionRunning = running
@@ -134,11 +150,16 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
     func stopSession() {
         sessionQueue.async { [weak self] in
             guard let self = self else { return }
-            if self.session.isRunning { self.session.stopRunning() }
-            DispatchQueue.main.async { self.isSessionRunning = false }
+            if self.session.isRunning {
+                self.session.stopRunning()
+            }
+            DispatchQueue.main.async {
+                self.isSessionRunning = false
+            }
         }
     }
 
+    // MARK: - Exposure
     func setManualExposure(iso: Float, shutterSpeed: CMTime) {
         sessionQueue.async { [weak self] in
             guard let self = self, let device = self.videoDeviceInput?.device else { return }
@@ -158,6 +179,7 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
         }
     }
 
+    // MARK: - Capture
     func capturePhoto() async throws -> Data {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Data, Error>) in
             continuationLock.lock()
@@ -176,23 +198,23 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
                     self.finishCapture(with: .failure(CameraError.sessionNotConfigured))
                     return
                 }
-                
+
                 if let connection = self.photoOutput.connection(with: .video) {
                     connection.isEnabled = true
                 }
-                
+
                 let settings: AVCapturePhotoSettings
                 if let rawFormat = self.photoOutput.availableRawPhotoPixelFormatTypes.first {
                     settings = AVCapturePhotoSettings(rawPixelFormatType: rawFormat)
                 } else {
                     settings = AVCapturePhotoSettings()
                 }
-                
+
                 settings.photoQualityPrioritization = .quality
                 if #available(iOS 17.0, *) {
                     settings.maxPhotoDimensions = self.photoOutput.maxPhotoDimensions
                 }
-                
+
                 self.photoOutput.capturePhoto(with: settings, delegate: self)
             }
         }
@@ -203,10 +225,12 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
         let continuation = photoContinuation
         photoContinuation = nil
         continuationLock.unlock()
+
         continuation?.resume(with: result)
     }
 }
 
+// MARK: - AVCapturePhotoCaptureDelegate
 extension CameraManager: AVCapturePhotoCaptureDelegate {
     nonisolated func photoOutput(_ output: AVCapturePhotoOutput, didFinishProcessingPhoto photo: AVCapturePhoto, error: Error?) {
         if let error = error {
