@@ -25,9 +25,7 @@ struct CameraView: View {
             }
         }
         .preferredColorScheme(.dark)
-        .onAppear {
-            motionManager.startUpdates()
-        }
+        .onAppear { motionManager.startUpdates() }
         .onDisappear {
             motionManager.stopUpdates()
             viewModel.stopSession()
@@ -36,7 +34,6 @@ struct CameraView: View {
         .onChange(of: viewModel.shutterSpeedSeconds) { _, _ in viewModel.updateExposure() }
     }
 
-    // MARK: - Overlay
     private var gridAndHorizonOverlay: some View {
         GeometryReader { geo in
             ZStack {
@@ -67,7 +64,6 @@ struct CameraView: View {
         }
     }
 
-    // MARK: - Control Panel
     private var controlPanel: some View {
         VStack(spacing: 12) {
             HStack {
@@ -82,7 +78,6 @@ struct CameraView: View {
                     formatter: { String(format: "%.0f", $0) }
                 )
                 
-                // Выдержка до 1.0 сек (максимум для сторонних приложений)
                 controlSlider(
                     title: "Shutter",
                     value: $viewModel.shutterSpeedSeconds,
@@ -92,7 +87,6 @@ struct CameraView: View {
                 )
             }
             
-            // Ползунок количества кадров для серии
             controlSlider(
                 title: "Кадров (RAW)",
                 value: $viewModel.burstCount,
@@ -123,7 +117,6 @@ struct CameraView: View {
         .tint(.white)
     }
 
-    // Только Double — без generic, без сюрпризов
     private func controlSlider(
         title: String,
         value: Binding<Double>,
@@ -140,7 +133,6 @@ struct CameraView: View {
     }
 }
 
-// MARK: - Camera Preview
 struct CameraPreviewView: UIViewRepresentable {
     let session: AVCaptureSession
 

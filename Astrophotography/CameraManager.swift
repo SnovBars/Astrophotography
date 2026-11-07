@@ -2,17 +2,10 @@ import AVFoundation
 import UIKit
 import Combine
 
-// MARK: - Errors
 enum CameraError: LocalizedError {
-    case permissionDenied
-    case permissionRestricted
-    case noCamera
-    case cannotConfigureSession(String)
-    case cannotAddInput
-    case cannotAddOutput
-    case sessionNotConfigured
-    case captureFailed(String)
-    case saveFailed(String)
+    case permissionDenied, permissionRestricted, noCamera
+    case cannotConfigureSession(String), cannotAddInput, cannotAddOutput
+    case sessionNotConfigured, captureFailed(String), saveFailed(String)
 
     var errorDescription: String? {
         switch self {
@@ -40,7 +33,7 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
     private let sessionQueue = DispatchQueue(label: "com.nikita.camera.sessionQueue")
 
     private let continuationLock = NSLock()
-    private var photoContinuation: CheckedContinuation<Data, Error>? // Теперь возвращаем Data
+    private var photoContinuation: CheckedContinuation<Data, Error>?
 
     static func currentCameraPermission() -> AVAuthorizationStatus {
         AVCaptureDevice.authorizationStatus(for: .video)
@@ -94,12 +87,9 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
 
                 if self.session.canAddOutput(self.photoOutput) {
                     self.session.addOutput(self.photoOutput)
-                    
-                    // Включаем поддержку RAW (DNG)
                     if self.photoOutput.availablePhotoPixelFormatTypes.contains(kCVPixelFormatType_RAW14) {
                         self.photoOutput.isRawCaptureEnabled = true
                     }
-                    
                     if #available(iOS 17.0, *) {
                         if let maxDim = camera.activeFormat.supportedMaxPhotoDimensions.first {
                             self.photoOutput.maxPhotoDimensions = maxDim
@@ -131,9 +121,7 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
                     DispatchQueue.main.async { continuation.resume() }
                     return
                 }
-                if !self.session.isRunning {
-                    self.session.startRunning()
-                }
+                if !self.session.isRunning { self.session.startRunning() }
                 let running = self.session.isRunning
                 DispatchQueue.main.async {
                     self.isSessionRunning = running
@@ -146,12 +134,8 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
     func stopSession() {
         sessionQueue.async { [weak self] in
             guard let self = self else { return }
-            if self.session.isRunning {
-                self.session.stopRunning()
-            }
-            DispatchQueue.main.async {
-                self.isSessionRunning = false
-            }
+            if self.session.isRunning { self.session.stopRunning() }
+            DispatchQueue.main.async { self.isSessionRunning = false }
         }
     }
 
@@ -197,7 +181,6 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
                     connection.isEnabled = true
                 }
                 
-                // Настраиваем захват в RAW
                 let settings: AVCapturePhotoSettings
                 if let rawFormat = self.photoOutput.availableRawPhotoPixelFormatTypes.first {
                     settings = AVCapturePhotoSettings(rawPixelFormatType: rawFormat)
@@ -220,7 +203,6 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
         let continuation = photoContinuation
         photoContinuation = nil
         continuationLock.unlock()
-
         continuation?.resume(with: result)
     }
 }
